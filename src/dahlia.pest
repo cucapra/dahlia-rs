@@ -1,0 +1,185 @@
+WHITESPACE = _{ " " | "\t" | NEWLINE }
+
+COMMENT = _{ "//" ~ (!NEWLINE ~ ANY)* ~ NEWLINE | "/*" ~ (!"*/" ~ ANY)* ~ "*/" }
+
+iden = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+
+number = @{ ASCII_DIGIT+ }
+
+string_val = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
+
+ty_float  = { "float" }
+ty_double = { "double" }
+ty_bool   = { "bool" }
+ty_bit    = { "bit" ~ "<" ~ number ~ ">" }
+ty_ubit   = { "ubit" ~ "<" ~ number ~ ">" }
+ty_fix    = { "fix" ~ "<" ~ number ~ "," ~ number ~ ">" }
+ty_ufix   = { "ufix" ~ "<" ~ number ~ "," ~ number ~ ">" }
+
+ty_atom = {
+    ty_float
+  | ty_double
+  | ty_bool
+  | ty_bit
+  | ty_ubit
+  | ty_fix
+  | ty_ufix
+  | iden
+}
+
+ty_idx = { "[" ~ number ~ ("bank" ~ number)? ~ "]" }
+
+ty = { ty_atom ~ (("{" ~ number ~ "}")? ~ ty_idx+)? }
+
+expr_cast = { "(" ~ expr ~ "as" ~ ty_atom ~ ")" }
+
+rec_lit_field = { iden ~ "=" ~ expr }
+
+rec_in = _{ rec_lit_field ~ (";" ~ rec_lit_field)* }
+
+arr_in = _{ expr ~ ("," ~ expr)* }
+
+compound_literal = { "{" ~ (rec_in | arr_in) ~ "}" }
+
+array_access = { iden ~ ("[" ~ expr ~ "]")+ }
+
+rational = @{ "-"? ~ ("0" | ASCII_NONZERO_DIGIT ~ ASCII_DIGIT*) ~ "." ~ ASCII_DIGIT+ }
+
+hex = @{ "0x" ~ ASCII_HEX_DIGIT+ }
+
+octal = @{ "0" ~ ASCII_OCT_DIGIT+ }
+
+uint = @{ "0" | "-"? ~ (ASCII_NONZERO_DIGIT ~ ASCII_DIGIT*) }
+
+boolean = { "true" | "false" }
+
+app = { iden ~ (("(" ~ ")") | ("(" ~ expr ~ ("," ~ expr)* ~ ")")) }
+
+primary = {
+    expr_cast
+  | compound_literal
+  | rational
+  | hex
+  | octal
+  | uint
+  | boolean
+  | array_access
+  | app
+  | iden
+  | "(" ~ expr ~ ")"
+}
+
+atom = ${ primary ~ ("." ~ iden)* }
+
+div    = { "/" }
+mul    = { "*" }
+modulo = { "%" }
+
+add = { "+" }
+sub = { "-" }
+
+shr = { ">>" }
+shl = { "<<" }
+
+eq  = { "==" }
+neq = { "!=" }
+ge  = { ">=" }
+le  = { "<=" }
+gt  = { ">" }
+lt  = { "<" }
+
+band = { "&" }
+bor  = { "|" }
+bxor = { "^" }
+
+and = { "&&" }
+or  = { "||" }
+
+infix_op = {
+    mul
+  | div
+  | modulo
+  | add
+  | sub
+  | shl
+  | shr
+  | eq
+  | neq
+  | le
+  | ge
+  | lt
+  | gt
+  | and
+  | or
+  | band
+  | bor
+  | bxor
+}
+
+expr = { atom ~ (infix_op ~ atom)* }
+
+let_stmt = { "let" ~ iden ~ (":" ~ ty)? ~ ("=" ~ expr)? }
+
+assign     = { ":=" }
+add_assign = { "+=" }
+sub_assign = { "-=" }
+mul_assign = { "*=" }
+div_assign = { "/=" }
+
+assign_op = {
+    assign
+  | add_assign
+  | sub_assign
+  | mul_assign
+  | div_assign
+}
+
+update = { expr ~ assign_op ~ expr }
+
+// TODO: add view split return
+simple_cmd = { let_stmt | update | expr }
+
+par_cmd = { block_cmd | (simple_cmd ~ ";")* }
+
+cmd = { par_cmd ~ ("---" ~ par_cmd)* }
+
+block = _{ "{" ~ cmd ~ "}" }
+
+// TODO: add for ifElse while decor
+block_cmd = { block }
+
+// TODO: include = { ... }
+// includes = { include* }
+
+arg = { iden ~ ":" ~ ty }
+
+func_args = {
+    "(" ~ ")"
+  | "(" ~ arg ~ ("," ~ arg)* ~ ")"
+}
+
+func_def = {
+    "def" ~ iden ~ func_args ~ (":" ~ ty)? ~ "=" ~ block
+}
+
+rec_field_defs = {
+    "{" ~ "}"
+  | "{" ~ arg ~ (";" ~ arg)* ~ "}"
+}
+
+record_def = { "record" ~ iden ~ "{" ~ rec_field_defs ~ "}" }
+
+// TODO: decor = { ... }
+// decors   = { decor* }
+
+decl  = _{ "decl" ~ arg ~ ";" }
+decls =  { decl* }
+
+def = { func_def | record_def }
+
+defs = { def* }
+
+prog_cmd = { cmd? }
+
+// prog = { SOI ~ includes ~ defs ~ decors ~ decls ~ prog_cmd ~ EOI }
+prog = { SOI ~ defs ~ decls ~ prog_cmd ~ EOI }
