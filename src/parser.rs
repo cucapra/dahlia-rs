@@ -2,7 +2,8 @@ use pest::pratt_parser::PrattParser;
 use pest_consume::{Error, Parser, match_nodes};
 
 use crate::ast::{
-    AssignOp, Command, Decl, Def, DimSpec, Expr, Id, InfixOp, Program, Type, TypeAtom,
+    AssignOp, Backend, Command, Decl, Def, DimSpec, Expr, ForRange, FuncSig, Id, Include, InfixOp,
+    Program, Suffix, Type, TypeAtom, View,
 };
 
 type Result<T> = std::result::Result<T, Error<Rule>>;
@@ -248,27 +249,95 @@ impl DahliaParser {
         ))
     }
 
-    fn assign_op(input: Node) -> Result<AssignOp> {
-        Ok(match input.as_rule() {
-            Rule::assign => AssignOp::Assign,
-            Rule::add_assign => AssignOp::AddAssign,
-            Rule::sub_assign => AssignOp::SubAssign,
-            Rule::mul_assign => AssignOp::MulAssign,
-            Rule::div_assign => AssignOp::DivAssign,
-            _ => unreachable!("Unexpected assignment operator: {:?}", input.as_rule()),
-        })
+    fn assign(_input: Node) -> Result<AssignOp> {
+        Ok(AssignOp::Assign)
     }
 
-    fn lvalue(input: Node) -> Result<Expr> {
-        match_nodes!(input.into_children();
-            [array_access(e)] => Ok(e),
-            [iden(id)] => Ok(Expr::Id(id))
-        )
+    fn add_assign(_input: Node) -> Result<AssignOp> {
+        Ok(AssignOp::AddAssign)
+    }
+
+    fn sub_assign(_input: Node) -> Result<AssignOp> {
+        Ok(AssignOp::SubAssign)
+    }
+
+    fn mul_assign(_input: Node) -> Result<AssignOp> {
+        Ok(AssignOp::MulAssign)
+    }
+
+    fn div_assign(_input: Node) -> Result<AssignOp> {
+        Ok(AssignOp::DivAssign)
+    }
+
+    fn assign_op(input: Node) -> Result<AssignOp> {
+        Ok(match_nodes!(input.into_children();
+            [assign(op)] => op,
+            [add_assign(op)] => op,
+            [sub_assign(op)] => op,
+            [mul_assign(op)] => op,
+            [div_assign(op)] => op
+        ))
     }
 
     fn update(input: Node) -> Result<Command> {
         Ok(match_nodes!(input.into_children();
-            [lvalue(lhs), assign_op(op), expr(rhs)] => Command::Update{lhs, op, rhs}
+            [expr(lhs), assign_op(op), expr(rhs)] => Command::Update{lhs, op, rhs}
+        ))
+    }
+
+    fn view_suffix_underscore(_input: Node) -> Result<()> {
+        Ok(())
+    }
+
+    fn view_suffix(input: Node) -> Result<Suffix> {
+        Ok(match_nodes!(input.into_children();
+            [view_suffix_underscore(_)] => Suffix::Rotation(Expr::IntLiteral{value:0, base:10}),
+            [number(factor), expr(e)] => Suffix::Aligned { factor, e },
+            [expr(e)] => Suffix::Rotation(e)
+        ))
+    }
+
+    fn view_prefix_opt(input: Node) -> Result<Option<usize>> {
+        Ok(match_nodes!(input.into_children();
+            [number(n)] => Some(n),
+            [] => None
+        ))
+    }
+
+    fn view_shrink_opt(input: Node) -> Result<Option<usize>> {
+        Ok(match_nodes!(input.into_children();
+            [number(n)] => Some(n),
+            [] => None
+        ))
+    }
+
+    fn view_param(input: Node) -> Result<View> {
+        Ok(match_nodes!(input.into_children();
+            [view_suffix(suffix), view_prefix_opt(prefix), view_shrink_opt(shrink)] => View{prefix, suffix, shrink}
+        ))
+    }
+
+    fn view(input: Node) -> Result<Command> {
+        Ok(match_nodes!(input.into_children();
+            [iden(id), iden(arr_id), view_param(dims)..] => Command::View{id, arr_id, dims: dims.into_iter().collect()}
+        ))
+    }
+
+    fn split_factor(input: Node) -> Result<usize> {
+        Ok(match_nodes!(input.into_children();
+            [number(factor)] => factor
+        ))
+    }
+
+    fn split(input: Node) -> Result<Command> {
+        Ok(match_nodes!(input.into_children();
+            [iden(id), iden(arr_id), split_factor(dims)..] => Command::Split{id, arr_id, dims: dims.into_iter().collect()}
+        ))
+    }
+
+    fn r#return(input: Node) -> Result<Command> {
+        Ok(match_nodes!(input.into_children();
+            [expr(e)] => Command::Return(e),
         ))
     }
 
@@ -276,6 +345,9 @@ impl DahliaParser {
         match_nodes!(input.into_children();
             [let_stmt(cmd)] => Ok(cmd),
             [update(cmd)] => Ok(cmd),
+            [view(cmd)] => Ok(cmd),
+            [r#return(cmd)] => Ok(cmd),
+            [split(cmd)] => Ok(cmd),
             [expr(e)] => Ok(Command::Expr(e))
         )
     }
@@ -286,10 +358,102 @@ impl DahliaParser {
         )
     }
 
+    fn block(input: Node) -> Result<Command> {
+        Ok(match_nodes!(input.into_children();
+            [cmd(c)] => c,
+        ))
+    }
+
+    fn else_block(input: Node) -> Result<Option<Command>> {
+        Ok(match_nodes!(input.into_children();
+            [block(cmd)] => Some(cmd),
+            [] => None
+        ))
+    }
+
+    fn if_else(input: Node) -> Result<Command> {
+        Ok(match_nodes!(input.into_children();
+            [expr(cond), block(then), else_block(else_)] => Command::IfElse{cond, then:Box::new(then), else_: else_.map(Box::new)}
+        ))
+    }
+
+    fn kw_pipeline(_input: Node) -> Result<()> {
+        Ok(())
+    }
+
+    fn pipeline(input: Node) -> Result<bool> {
+        Ok(match_nodes!(input.into_children();
+            [kw_pipeline(_)] => true,
+            [] => false
+        ))
+    }
+
+    fn kw_for_rev(_input: Node) -> Result<()> {
+        Ok(())
+    }
+
+    fn for_rev(input: Node) -> Result<bool> {
+        Ok(match_nodes!(input.into_children();
+            [kw_for_rev(_)] => true,
+            [] => false
+        ))
+    }
+
+    fn while_loop(input: Node) -> Result<Command> {
+        Ok(match_nodes!(input.into_children();
+            [expr(cond), block(body)] => Command::While{cond, pipeline:false, body: Box::new(body)},
+            [expr(cond), pipeline(_), block(body)] => Command::While{cond, pipeline:true, body: Box::new(body)}
+        ))
+    }
+
+    fn for_range(input: Node) -> Result<ForRange> {
+        Ok(match_nodes!(input.into_children();
+            [iden(id), ty(ty), for_rev(rev), number(start), number(end), number(unroll)] => ForRange{id, ty: Some(ty), rev, start, end, unroll},
+            [iden(id), ty(ty), for_rev(rev), number(start), number(end), ] => ForRange{id, ty: Some(ty), rev, start, end, unroll:1},
+            [iden(id), for_rev(rev), number(start), number(end), number(unroll)] => ForRange{id, ty: None, rev, start, end, unroll},
+            [iden(id), for_rev(rev), number(start), number(end)] => ForRange{id, ty: None, rev, start, end, unroll:1},
+        ))
+    }
+
+    fn combine_block(input: Node) -> Result<Option<Command>> {
+        Ok(match_nodes!(input.into_children();
+            [block(cmd)] => Some(cmd),
+            [] => None
+        ))
+    }
+
+    fn string_val(input: Node) -> Result<String> {
+        Ok(input.as_str().trim_matches('"').to_string())
+    }
+
+    fn decor(input: Node) -> Result<Command> {
+        Ok(match_nodes!(input.into_children();
+            [string_val(value)] => Command::Decorate(value)
+        ))
+    }
+
+    fn decors(input: Node) -> Result<Vec<Command>> {
+        Ok(match_nodes!(input.into_children();
+            [decor(decs)..] => decs.into_iter().collect()
+        ))
+    }
+
+    fn for_loop(input: Node) -> Result<Command> {
+        Ok(match_nodes!(input.into_children();
+            [for_range(range), pipeline(pipeline), block(body), combine_block(combine)] => Command::For{range, pipeline, body: Box::new(body), combine: combine.map(Box::new)},
+        ))
+    }
+
+    fn par_cmd_item(input: Node) -> Result<Command> {
+        match_nodes!(input.into_children();
+            [block_cmd(c)] => Ok(c),
+            [simple_cmd(c)] => Ok(c)
+        )
+    }
+
     fn par_cmd(input: Node) -> Result<Command> {
         match_nodes!(input.into_children();
-            [cmd(c)] => Ok(c),
-            [simple_cmd(c)..] => Ok(Command::Par(c.into_iter().collect()))
+            [par_cmd_item(c)..] => Ok(Command::Par(c.into_iter().collect()))
         )
     }
 
@@ -307,8 +471,8 @@ impl DahliaParser {
 
     fn func_def(input: Node) -> Result<Def> {
         Ok(match_nodes!(input.into_children();
-            [iden(name), func_args(args), ty(ret_ty), cmd(body)] => Def::Func{name, args, ret_ty: Some(ret_ty), body},
-            [iden(name), func_args(args), cmd(body)] => Def::Func{name, args, ret_ty: None, body}
+            [iden(name), func_args(args), ty(ret_ty), block(body)] => Def::Func{sig: FuncSig{name, args, ret_ty: Some(ret_ty)}, body},
+            [iden(name), func_args(args), block(body)] => Def::Func{sig: FuncSig{name, args, ret_ty: None}, body}
         ))
     }
 
@@ -343,6 +507,16 @@ impl DahliaParser {
         ))
     }
 
+    fn block_cmd(input: Node) -> Result<Command> {
+        Ok(match_nodes!(input.into_children();
+            [block(c)] => c,
+            [if_else(c)] => c,
+            [while_loop(c)] => c,
+            [for_loop(c)] => c,
+            [decor(c)] => c,
+        ))
+    }
+
     fn prog_cmd(input: Node) -> Result<Option<Command>> {
         Ok(match_nodes!(input.into_children();
             [cmd(cmd)] => Some(cmd),
@@ -350,9 +524,65 @@ impl DahliaParser {
         ))
     }
 
+    fn backend_cpp(_input: Node) -> Result<Backend> {
+        Ok(Backend::Cpp)
+    }
+
+    fn backend_vivado(_input: Node) -> Result<Backend> {
+        Ok(Backend::Vivado)
+    }
+
+    fn backend_futil(_input: Node) -> Result<Backend> {
+        Ok(Backend::Futil)
+    }
+
+    fn backend_calyx(_input: Node) -> Result<Backend> {
+        Ok(Backend::Calyx)
+    }
+
+    fn backend(input: Node) -> Result<Backend> {
+        Ok(match_nodes!(input.into_children();
+            [backend_cpp(b)] => b,
+            [backend_vivado(b)] => b,
+            [backend_futil(b)] => b,
+            [backend_calyx(b)] => b))
+    }
+
+    fn func_signature(input: Node) -> Result<FuncSig> {
+        Ok(match_nodes!(input.into_children();
+            [iden(name), func_args(args), ty(ret_ty)] => FuncSig{name, args, ret_ty: Some(ret_ty)},
+            [iden(name), func_args(args)] => FuncSig{name, args, ret_ty: None}
+        ))
+    }
+
+    fn func_signatures(input: Node) -> Result<Vec<FuncSig>> {
+        Ok(match_nodes!(input.into_children();
+            [func_signature(sigs)..] => sigs.into_iter().collect()
+        ))
+    }
+
+    fn backend_opt(input: Node) -> Result<(Backend, String)> {
+        Ok(match_nodes!(input.into_children();
+            [backend(b), string_val(s)] => (b, s)
+        ))
+    }
+
+    fn include(input: Node) -> Result<Include> {
+        Ok(match_nodes!(input.into_children();
+            [backend_opt(backends).., func_signatures(sigs)] => Include{ backends: backends.into_iter().collect(), defs: sigs }
+        ))
+    }
+
+    fn includes(input: Node) -> Result<Vec<Include>> {
+        Ok(match_nodes!(input.into_children();
+            [include(includes)..] => includes.into_iter().collect()
+        ))
+    }
+
     fn prog(input: Node) -> Result<Program> {
         Ok(match_nodes!(input.into_children();
-            [defs(defs), decls(decls), prog_cmd(cmd), EOI(_)] => Program{defs, decls, cmd}
+            [includes(includes), defs(defs), decors(decors), decls(decls), prog_cmd(cmd), EOI(_)] => Program{includes, defs, decors, decls, cmd, }
+
         ))
     }
 }

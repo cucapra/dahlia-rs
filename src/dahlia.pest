@@ -134,24 +134,80 @@ assign_op = {
   | div_assign
 }
 
-lvalue = { array_access | iden }
+// lvalue = { array_access | iden }
 
-update = { lvalue ~ assign_op ~ expr }
+update = { expr ~ assign_op ~ expr }
 
-// TODO: add view split return
-simple_cmd = { let_stmt | update | expr }
+view_suffix_underscore = { "_" }
 
-par_cmd = { block_cmd | (simple_cmd ~ ";")* }
+view_suffix = { view_suffix_underscore | number ~ "*" ~ expr | expr ~ "!" }
+
+view_prefix_opt = { ("+" ~ number)? }
+
+view_shrink_opt = { ("bank" ~ number)? }
+
+view_param = { "[" ~ view_suffix ~ ":" ~ view_prefix_opt ~ view_shrink_opt ~ "]" }
+
+view = { "view" ~ iden ~ "=" ~ iden ~ view_param+ }
+
+split_factor = { "[" ~ "by" ~ number ~ "]" }
+
+split = { "split" ~ iden ~ "=" ~ iden ~ split_factor+ }
+
+return = { "return" ~ expr }
+
+simple_cmd = { let_stmt | update | split | return | view | expr }
+
+par_cmd_item = { block_cmd | (simple_cmd ~ ";") }
+
+par_cmd = { par_cmd_item* }
 
 cmd = { par_cmd ~ ("---" ~ par_cmd)* }
 
-block = _{ "{" ~ cmd ~ "}" }
+block = { "{" ~ cmd ~ "}" }
 
-// TODO: add for ifElse while decor
-block_cmd = { block }
+else_block = { ("else" ~ block)? }
 
-// TODO: include = { ... }
-// includes = { include* }
+if_else = { "if" ~ "(" ~ expr ~ ")" ~ block ~ else_block }
+
+kw_pipeline = { "pipeline" }
+
+pipeline = { kw_pipeline? }
+
+while_loop = { "while" ~ "(" ~ expr ~ ")" ~ pipeline ~ block }
+
+kw_for_rev = { "rev" }
+
+for_rev = { kw_for_rev? }
+
+for_range = { "(" ~ "let" ~ iden ~ (":" ~ ty)? ~ "=" ~ for_rev ~ number ~ ".." ~ number ~ ")" ~ ("unroll" ~ number)? }
+
+for_loop = { "for" ~ for_range ~ pipeline ~ block ~ combine_block }
+
+combine_block = { ("combine" ~ block)? }
+
+decor = { "decor" ~ string_val }
+
+decors = { decor* }
+
+block_cmd = { block | if_else | while_loop | for_loop | decor }
+
+backend_cpp    = { "c++" }
+backend_vivado = { "vivado" }
+backend_futil  = { "futil" }
+backend_calyx  = { "calyx" }
+
+backend = { backend_cpp | backend_vivado | backend_futil | backend_calyx }
+
+func_signature = { "def" ~ iden ~ func_args ~ (":" ~ ty)? ~ ";" }
+
+func_signatures = { func_signature* }
+
+backend_opt = { backend ~ "(" ~ string_val ~ ")" }
+
+include = { "import" ~ backend_opt+ ~ "{" ~ func_signatures ~ "}" }
+
+includes = { include* }
 
 arg = { iden ~ ":" ~ ty }
 
@@ -169,10 +225,7 @@ rec_field_defs = {
   | "{" ~ arg ~ (";" ~ arg)* ~ "}"
 }
 
-record_def = { "record" ~ iden ~ "{" ~ rec_field_defs ~ "}" }
-
-// TODO: decor = { ... }
-// decors   = { decor* }
+record_def = { "record" ~ iden ~ rec_field_defs }
 
 decl  = _{ "decl" ~ arg ~ ";" }
 decls =  { decl* }
@@ -183,5 +236,4 @@ defs = { def* }
 
 prog_cmd = { cmd? }
 
-// prog = { SOI ~ includes ~ defs ~ decors ~ decls ~ prog_cmd ~ EOI }
-prog = { SOI ~ defs ~ decls ~ prog_cmd ~ EOI }
+prog = { SOI ~ includes ~ defs ~ decors ~ decls ~ prog_cmd ~ EOI }

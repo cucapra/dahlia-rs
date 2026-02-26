@@ -108,6 +108,16 @@ pub enum AssignOp {
 }
 
 #[derive(Debug)]
+pub struct ForRange {
+    pub id: Id,
+    pub ty: Option<Type>,
+    pub rev: bool,
+    pub start: usize,
+    pub end: usize,
+    pub unroll: usize,
+}
+
+#[derive(Debug)]
 pub enum Command {
     Par(Vec<Command>),
     Seq(Vec<Command>),
@@ -121,6 +131,34 @@ pub enum Command {
         op: AssignOp,
         rhs: Expr,
     },
+    View {
+        id: Id,
+        arr_id: Id,
+        dims: Vec<View>,
+    },
+    Split {
+        id: Id,
+        arr_id: Id,
+        dims: Vec<usize>,
+    },
+    Return(Expr),
+    IfElse {
+        cond: Expr,
+        then: Box<Command>,
+        else_: Option<Box<Command>>,
+    },
+    While {
+        cond: Expr,
+        pipeline: bool,
+        body: Box<Command>,
+    },
+    For {
+        range: ForRange,
+        pipeline: bool,
+        body: Box<Command>,
+        combine: Option<Box<Command>>,
+    },
+    Decorate(String),
     Expr(Expr),
 }
 
@@ -131,22 +169,50 @@ pub struct Decl {
 }
 
 #[derive(Debug)]
+pub struct FuncSig {
+    pub name: Id,
+    pub args: Vec<Decl>,
+    pub ret_ty: Option<Type>,
+}
+
+#[derive(Debug)]
 pub enum Def {
-    Func {
-        name: Id,
-        args: Vec<Decl>,
-        ret_ty: Option<Type>,
-        body: Command,
-    },
-    Record {
-        name: Id,
-        fields: Vec<Decl>,
-    },
+    Func { sig: FuncSig, body: Command },
+    Record { name: Id, fields: Vec<Decl> },
+}
+
+#[derive(Debug)]
+pub enum Suffix {
+    Rotation(Expr),
+    Aligned { factor: usize, e: Expr },
+}
+
+#[derive(Debug)]
+pub struct View {
+    pub suffix: Suffix,
+    pub prefix: Option<usize>,
+    pub shrink: Option<usize>,
+}
+
+#[derive(Debug)]
+pub enum Backend {
+    Cpp,
+    Vivado,
+    Futil,
+    Calyx,
+}
+
+#[derive(Debug)]
+pub struct Include {
+    pub backends: Vec<(Backend, String)>,
+    pub defs: Vec<FuncSig>,
 }
 
 #[derive(Debug)]
 pub struct Program {
+    pub includes: Vec<Include>,
     pub defs: Vec<Def>,
+    pub decors: Vec<Command>,
     pub decls: Vec<Decl>,
     pub cmd: Option<Command>,
 }
