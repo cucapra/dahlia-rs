@@ -259,9 +259,16 @@ impl DahliaParser {
         })
     }
 
+    fn lvalue(input: Node) -> Result<Expr> {
+        match_nodes!(input.into_children();
+            [array_access(e)] => Ok(e),
+            [iden(id)] => Ok(Expr::Id(id))
+        )
+    }
+
     fn update(input: Node) -> Result<Command> {
         Ok(match_nodes!(input.into_children();
-            [expr(lhs), assign_op(op), expr(rhs)] => Command::Update{lhs, op, rhs}
+            [lvalue(lhs), assign_op(op), expr(rhs)] => Command::Update{lhs, op, rhs}
         ))
     }
 
