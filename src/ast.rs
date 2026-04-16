@@ -119,6 +119,7 @@ pub struct ForRange {
 
 #[derive(Debug)]
 pub enum Command {
+    Empty,
     Par(Vec<Command>),
     Seq(Vec<Command>),
     Let {
@@ -145,7 +146,7 @@ pub enum Command {
     IfElse {
         cond: Expr,
         then: Box<Command>,
-        else_: Option<Box<Command>>,
+        else_: Box<Command>,
     },
     While {
         cond: Expr,
@@ -156,7 +157,7 @@ pub enum Command {
         range: ForRange,
         pipeline: bool,
         body: Box<Command>,
-        combine: Option<Box<Command>>,
+        combine: Box<Command>,
     },
     Decorate(String),
     Expr(Expr),
@@ -214,5 +215,45 @@ pub struct Program {
     pub defs: Vec<Def>,
     pub decors: Vec<Command>,
     pub decls: Vec<Decl>,
-    pub cmd: Option<Command>,
+    pub cmd: Command,
+}
+
+impl Command {
+    pub fn smart_par(cmds: Vec<Command>) -> Command {
+        let mut flat: Vec<_> = cmds
+            .into_iter()
+            .flat_map(|cmd| match cmd {
+                Command::Par(cs) => cs,
+                Command::Empty => vec![],
+                _ => vec![cmd],
+            })
+            .collect();
+
+        if flat.is_empty() {
+            Command::Empty
+        } else if flat.len() == 1 {
+            flat.remove(0)
+        } else {
+            Command::Par(flat)
+        }
+    }
+
+    pub fn smart_seq(cmds: Vec<Command>) -> Command {
+        let mut flat: Vec<_> = cmds
+            .into_iter()
+            .flat_map(|cmd| match cmd {
+                Command::Seq(cs) => cs,
+                Command::Empty => vec![],
+                _ => vec![cmd],
+            })
+            .collect();
+
+        if flat.is_empty() {
+            Command::Empty
+        } else if flat.len() == 1 {
+            flat.remove(0)
+        } else {
+            Command::Seq(flat)
+        }
+    }
 }

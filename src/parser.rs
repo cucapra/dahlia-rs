@@ -354,7 +354,7 @@ impl DahliaParser {
 
     fn cmd(input: Node) -> Result<Command> {
         match_nodes!(input.into_children();
-            [par_cmd(c)..] => Ok(Command::Par(c.into_iter().collect())),
+            [par_cmd(c)..] => Ok(Command::smart_seq(c.into_iter().collect())),
         )
     }
 
@@ -373,7 +373,7 @@ impl DahliaParser {
 
     fn if_else(input: Node) -> Result<Command> {
         Ok(match_nodes!(input.into_children();
-            [expr(cond), block(then), else_block(else_)] => Command::IfElse{cond, then:Box::new(then), else_: else_.map(Box::new)}
+            [expr(cond), block(then), else_block(else_)] => Command::IfElse{cond, then:Box::new(then), else_: else_.map(Box::new).unwrap_or(Box::new(Command::Empty))}
         ))
     }
 
@@ -415,10 +415,10 @@ impl DahliaParser {
         ))
     }
 
-    fn combine_block(input: Node) -> Result<Option<Command>> {
+    fn combine_block(input: Node) -> Result<Command> {
         Ok(match_nodes!(input.into_children();
-            [block(cmd)] => Some(cmd),
-            [] => None
+            [block(cmd)] => cmd,
+            [] => Command::Empty
         ))
     }
 
@@ -440,7 +440,7 @@ impl DahliaParser {
 
     fn for_loop(input: Node) -> Result<Command> {
         Ok(match_nodes!(input.into_children();
-            [for_range(range), pipeline(pipeline), block(body), combine_block(combine)] => Command::For{range, pipeline, body: Box::new(body), combine: combine.map(Box::new)},
+            [for_range(range), pipeline(pipeline), block(body), combine_block(combine)] => Command::For{range, pipeline, body: Box::new(body), combine: Box::new(combine)},
         ))
     }
 
@@ -453,7 +453,7 @@ impl DahliaParser {
 
     fn par_cmd(input: Node) -> Result<Command> {
         match_nodes!(input.into_children();
-            [par_cmd_item(c)..] => Ok(Command::Par(c.into_iter().collect()))
+            [par_cmd_item(c)..] => Ok(Command::smart_par(c.into_iter().collect()))
         )
     }
 
@@ -517,10 +517,10 @@ impl DahliaParser {
         ))
     }
 
-    fn prog_cmd(input: Node) -> Result<Option<Command>> {
+    fn prog_cmd(input: Node) -> Result<Command> {
         Ok(match_nodes!(input.into_children();
-            [cmd(cmd)] => Some(cmd),
-            [] => None
+            [cmd(cmd)] => cmd,
+            [] => Command::Empty
         ))
     }
 
