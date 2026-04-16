@@ -165,6 +165,11 @@ pub enum Command<'a> {
     Expr(&'a Expr<'a>),
 }
 
+pub static EMPTY_CMD: Command<'static> = Command::Empty;
+pub static TRUE_EXPR: Expr<'static> = Expr::BoolLiteral(true);
+pub static FALSE_EXPR: Expr<'static> = Expr::BoolLiteral(false);
+pub static ZERO_EXPR: Expr<'static> = Expr::IntLiteral { value: 0, base: 10 };
+
 #[derive(Debug)]
 pub struct Decl {
     pub id: Id,
@@ -232,7 +237,7 @@ impl Command<'_> {
         }
 
         if flat.is_empty() {
-            bump.alloc(Command::Empty)
+            &EMPTY_CMD
         } else if flat.len() == 1 {
             flat.remove(0)
         } else {
@@ -251,7 +256,7 @@ impl Command<'_> {
         }
 
         if flat.is_empty() {
-            bump.alloc(Command::Empty)
+            &EMPTY_CMD
         } else if flat.len() == 1 {
             flat.remove(0)
         } else {

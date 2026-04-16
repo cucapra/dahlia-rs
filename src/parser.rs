@@ -4,7 +4,7 @@ use pest_consume::{Error, Parser, match_nodes};
 
 use crate::ast::{
     AssignOp, Backend, Command, Decl, Def, DimSpec, Expr, ForRange, FuncSig, Id, Include, InfixOp,
-    Program, Suffix, Type, TypeAtom, View,
+    Program, Suffix, Type, TypeAtom, View, EMPTY_CMD, FALSE_EXPR, TRUE_EXPR, ZERO_EXPR,
 };
 
 type Result<T> = std::result::Result<T, Error<Rule>>;
@@ -172,10 +172,9 @@ impl DahliaParser {
     }
 
     fn boolean<'i, 'a>(input: Node<'i, 'a>) -> Result<&'a Expr<'a>> {
-        let bump = *input.user_data();
         match input.as_str() {
-            "true" => Ok(bump.alloc(Expr::BoolLiteral(true))),
-            "false" => Ok(bump.alloc(Expr::BoolLiteral(false))),
+            "true" => Ok(&TRUE_EXPR),
+            "false" => Ok(&FALSE_EXPR),
             _ => unreachable!(),
         }
     }
@@ -305,9 +304,8 @@ impl DahliaParser {
     }
 
     fn view_suffix<'i, 'a>(input: Node<'i, 'a>) -> Result<Suffix<'a>> {
-        let bump = *input.user_data();
         Ok(match_nodes!(input.into_children();
-            [view_suffix_underscore(_)] => Suffix::Rotation(bump.alloc(Expr::IntLiteral{value:0, base:10})),
+            [view_suffix_underscore(_)] => Suffix::Rotation(&ZERO_EXPR),
             [number(factor), expr(e)] => Suffix::Aligned { factor, e },
             [expr(e)] => Suffix::Rotation(e)
         ))
@@ -395,7 +393,7 @@ impl DahliaParser {
     fn if_else<'i, 'a>(input: Node<'i, 'a>) -> Result<&'a Command<'a>> {
         let bump = *input.user_data();
         Ok(match_nodes!(input.into_children();
-            [expr(cond), block(then), else_block(else_)] => bump.alloc(Command::IfElse{cond, then, else_: else_.unwrap_or(bump.alloc(Command::Empty))})
+            [expr(cond), block(then), else_block(else_)] => bump.alloc(Command::IfElse{cond, then, else_: else_.unwrap_or(&EMPTY_CMD)})
         ))
     }
 
@@ -439,10 +437,9 @@ impl DahliaParser {
     }
 
     fn combine_block<'i, 'a>(input: Node<'i, 'a>) -> Result<&'a Command<'a>> {
-        let bump = *input.user_data();
         Ok(match_nodes!(input.into_children();
             [block(cmd)] => cmd,
-            [] => bump.alloc(Command::Empty)
+            [] => &EMPTY_CMD
         ))
     }
 
@@ -545,10 +542,9 @@ impl DahliaParser {
     }
 
     fn prog_cmd<'i, 'a>(input: Node<'i, 'a>) -> Result<&'a Command<'a>> {
-        let bump = *input.user_data();
         Ok(match_nodes!(input.into_children();
             [cmd(cmd)] => cmd,
-            [] => bump.alloc(Command::Empty)
+            [] => &EMPTY_CMD
         ))
     }
 
