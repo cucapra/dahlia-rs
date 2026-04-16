@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use bumpalo::Bump;
+
 #[derive(Debug, Hash, Eq, PartialEq)]
 pub struct Id(pub String);
 
@@ -59,14 +61,14 @@ pub enum InfixOp {
 }
 
 #[derive(Debug)]
-pub enum Expr {
+pub enum Expr<'a> {
     Cast {
-        expr: Box<Expr>,
+        expr: &'a Expr<'a>,
         ty: TypeAtom,
     },
 
-    ArrayLiteral(Vec<Expr>),
-    RecordLiteral(HashMap<Id, Expr>),
+    ArrayLiteral(Vec<&'a Expr<'a>>),
+    RecordLiteral(HashMap<Id, &'a Expr<'a>>),
 
     RationalLiteral(String),
     IntLiteral {
@@ -77,24 +79,24 @@ pub enum Expr {
 
     ArrayAccess {
         array: Id,
-        indices: Vec<Expr>,
+        indices: Vec<&'a Expr<'a>>,
     },
     RecordAccess {
-        record: Box<Expr>,
+        record: &'a Expr<'a>,
         field: Id,
     },
 
     Application {
         func: Id,
-        args: Vec<Expr>,
+        args: Vec<&'a Expr<'a>>,
     },
 
     Id(Id),
 
     BinOp {
-        left: Box<Expr>,
+        left: &'a Expr<'a>,
         op: InfixOp,
-        right: Box<Expr>,
+        right: &'a Expr<'a>,
     },
 }
 
@@ -118,49 +120,49 @@ pub struct ForRange {
 }
 
 #[derive(Debug)]
-pub enum Command {
+pub enum Command<'a> {
     Empty,
-    Par(Vec<Command>),
-    Seq(Vec<Command>),
+    Par(Vec<&'a Command<'a>>),
+    Seq(Vec<&'a Command<'a>>),
     Let {
         id: Id,
         ty: Option<Type>,
-        value: Option<Expr>,
+        value: Option<&'a Expr<'a>>,
     },
     Update {
-        lhs: Expr,
+        lhs: &'a Expr<'a>,
         op: AssignOp,
-        rhs: Expr,
+        rhs: &'a Expr<'a>,
     },
     View {
         id: Id,
         arr_id: Id,
-        dims: Vec<View>,
+        dims: Vec<View<'a>>,
     },
     Split {
         id: Id,
         arr_id: Id,
         dims: Vec<usize>,
     },
-    Return(Expr),
+    Return(&'a Expr<'a>),
     IfElse {
-        cond: Expr,
-        then: Box<Command>,
-        else_: Box<Command>,
+        cond: &'a Expr<'a>,
+        then: &'a Command<'a>,
+        else_: &'a Command<'a>,
     },
     While {
-        cond: Expr,
+        cond: &'a Expr<'a>,
         pipeline: bool,
-        body: Box<Command>,
+        body: &'a Command<'a>,
     },
     For {
         range: ForRange,
         pipeline: bool,
-        body: Box<Command>,
-        combine: Box<Command>,
+        body: &'a Command<'a>,
+        combine: &'a Command<'a>,
     },
     Decorate(String),
-    Expr(Expr),
+    Expr(&'a Expr<'a>),
 }
 
 #[derive(Debug)]
@@ -177,20 +179,20 @@ pub struct FuncSig {
 }
 
 #[derive(Debug)]
-pub enum Def {
-    Func { sig: FuncSig, body: Command },
+pub enum Def<'a> {
+    Func { sig: FuncSig, body: &'a Command<'a> },
     Record { name: Id, fields: Vec<Decl> },
 }
 
 #[derive(Debug)]
-pub enum Suffix {
-    Rotation(Expr),
-    Aligned { factor: usize, e: Expr },
+pub enum Suffix<'a> {
+    Rotation(&'a Expr<'a>),
+    Aligned { factor: usize, e: &'a Expr<'a> },
 }
 
 #[derive(Debug)]
-pub struct View {
-    pub suffix: Suffix,
+pub struct View<'a> {
+    pub suffix: Suffix<'a>,
     pub prefix: Option<usize>,
     pub shrink: Option<usize>,
 }
@@ -210,50 +212,50 @@ pub struct Include {
 }
 
 #[derive(Debug)]
-pub struct Program {
+pub struct Program<'a> {
     pub includes: Vec<Include>,
-    pub defs: Vec<Def>,
-    pub decors: Vec<Command>,
+    pub defs: Vec<Def<'a>>,
+    pub decors: Vec<&'a Command<'a>>,
     pub decls: Vec<Decl>,
-    pub cmd: Command,
+    pub cmd: &'a Command<'a>,
 }
 
-impl Command {
-    pub fn smart_par(cmds: Vec<Command>) -> Command {
-        let mut flat: Vec<_> = cmds
-            .into_iter()
-            .flat_map(|cmd| match cmd {
-                Command::Par(cs) => cs,
-                Command::Empty => vec![],
-                _ => vec![cmd],
-            })
-            .collect();
+impl Command<'_> {
+    pub fn smart_par<'a>(cmds: Vec<&'a Command<'a>>, bump: &'a Bump) -> &'a Command<'a> {
+        let mut flat = Vec::new();
+        for cmd in cmds {
+            match cmd {
+                Command::Par(cs) => flat.extend(cs),
+                Command::Empty => (),
+                _ => flat.push(cmd),
+            }
+        }
 
         if flat.is_empty() {
-            Command::Empty
+            bump.alloc(Command::Empty)
         } else if flat.len() == 1 {
             flat.remove(0)
         } else {
-            Command::Par(flat)
+            bump.alloc(Command::Par(flat))
         }
     }
 
-    pub fn smart_seq(cmds: Vec<Command>) -> Command {
-        let mut flat: Vec<_> = cmds
-            .into_iter()
-            .flat_map(|cmd| match cmd {
-                Command::Seq(cs) => cs,
-                Command::Empty => vec![],
-                _ => vec![cmd],
-            })
-            .collect();
+    pub fn smart_seq<'a>(cmds: Vec<&'a Command<'a>>, bump: &'a Bump) -> &'a Command<'a> {
+        let mut flat = Vec::new();
+        for cmd in cmds {
+            match cmd {
+                Command::Seq(cs) => flat.extend(cs),
+                Command::Empty => (),
+                _ => flat.push(cmd),
+            }
+        }
 
         if flat.is_empty() {
-            Command::Empty
+            bump.alloc(Command::Empty)
         } else if flat.len() == 1 {
             flat.remove(0)
         } else {
-            Command::Seq(flat)
+            bump.alloc(Command::Seq(flat))
         }
     }
 }

@@ -1,8 +1,10 @@
+use bumpalo::Bump;
 use dahlia_rs::parser::parse_dahlia;
 
 fn parse_ok(input: &str) {
+    let bump = Bump::new();
     assert!(
-        parse_dahlia(input).is_ok(),
+        parse_dahlia(input, &bump).is_ok(),
         "Failed to parse:\n{}",
         input
     );
