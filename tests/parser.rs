@@ -1,10 +1,12 @@
-use bumpalo::Bump;
+use std::cell::RefCell;
+
+use dahlia_rs::ast::AstData;
 use dahlia_rs::parser::parse_dahlia;
 
 fn parse_ok(input: &str) {
-    let bump = Bump::new();
+    let ast_data = RefCell::new(AstData::default());
     assert!(
-        parse_dahlia(input, &bump).is_ok(),
+        parse_dahlia(input, &ast_data).is_ok(),
         "Failed to parse:\n{}",
         input
     );

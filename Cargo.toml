@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bumpalo = "3.20.2"
+cranelift-entity = "0.131.0"
 lazy_static = "1.5.0"
 pest = "2.8.6"
 pest_consume = "1.1.3"

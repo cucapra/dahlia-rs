@@ -1,6 +1,23 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 
-use bumpalo::Bump;
+use cranelift_entity::{EntityList, ListPool, PrimaryMap, entity_impl};
+
+#[derive(Clone, Copy, Hash, Eq, PartialEq)]
+pub struct ExprId(u32);
+entity_impl!(ExprId, "expr");
+
+#[derive(Clone, Copy, Hash, Eq, PartialEq)]
+pub struct CommandId(u32);
+entity_impl!(CommandId, "cmd");
+
+#[derive(Debug, Default)]
+pub struct AstData {
+    pub exprs: PrimaryMap<ExprId, Expr>,
+    pub commands: PrimaryMap<CommandId, Command>,
+    pub expr_lists: ListPool<ExprId>,
+    pub command_lists: ListPool<CommandId>,
+}
 
 #[derive(Debug, Hash, Eq, PartialEq)]
 pub struct Id(pub String);
@@ -61,14 +78,14 @@ pub enum InfixOp {
 }
 
 #[derive(Debug)]
-pub enum Expr<'a> {
+pub enum Expr {
     Cast {
-        expr: &'a Expr<'a>,
+        expr: ExprId,
         ty: TypeAtom,
     },
 
-    ArrayLiteral(Vec<&'a Expr<'a>>),
-    RecordLiteral(HashMap<Id, &'a Expr<'a>>),
+    ArrayLiteral(EntityList<ExprId>),
+    RecordLiteral(HashMap<Id, ExprId>),
 
     RationalLiteral(String),
     IntLiteral {
@@ -79,24 +96,24 @@ pub enum Expr<'a> {
 
     ArrayAccess {
         array: Id,
-        indices: Vec<&'a Expr<'a>>,
+        indices: EntityList<ExprId>,
     },
     RecordAccess {
-        record: &'a Expr<'a>,
+        record: ExprId,
         field: Id,
     },
 
     Application {
         func: Id,
-        args: Vec<&'a Expr<'a>>,
+        args: EntityList<ExprId>,
     },
 
     Id(Id),
 
     BinOp {
-        left: &'a Expr<'a>,
+        left: ExprId,
         op: InfixOp,
-        right: &'a Expr<'a>,
+        right: ExprId,
     },
 }
 
@@ -120,55 +137,50 @@ pub struct ForRange {
 }
 
 #[derive(Debug)]
-pub enum Command<'a> {
+pub enum Command {
     Empty,
-    Par(Vec<&'a Command<'a>>),
-    Seq(Vec<&'a Command<'a>>),
+    Par(EntityList<CommandId>),
+    Seq(EntityList<CommandId>),
     Let {
         id: Id,
         ty: Option<Type>,
-        value: Option<&'a Expr<'a>>,
+        value: Option<ExprId>,
     },
     Update {
-        lhs: &'a Expr<'a>,
+        lhs: ExprId,
         op: AssignOp,
-        rhs: &'a Expr<'a>,
+        rhs: ExprId,
     },
     View {
         id: Id,
         arr_id: Id,
-        dims: Vec<View<'a>>,
+        dims: Vec<View>,
     },
     Split {
         id: Id,
         arr_id: Id,
         dims: Vec<usize>,
     },
-    Return(&'a Expr<'a>),
+    Return(ExprId),
     IfElse {
-        cond: &'a Expr<'a>,
-        then: &'a Command<'a>,
-        else_: &'a Command<'a>,
+        cond: ExprId,
+        then: CommandId,
+        else_: CommandId,
     },
     While {
-        cond: &'a Expr<'a>,
+        cond: ExprId,
         pipeline: bool,
-        body: &'a Command<'a>,
+        body: CommandId,
     },
     For {
         range: ForRange,
         pipeline: bool,
-        body: &'a Command<'a>,
-        combine: &'a Command<'a>,
+        body: CommandId,
+        combine: CommandId,
     },
     Decorate(String),
-    Expr(&'a Expr<'a>),
+    Expr(ExprId),
 }
-
-pub static EMPTY_CMD: Command<'static> = Command::Empty;
-pub static TRUE_EXPR: Expr<'static> = Expr::BoolLiteral(true);
-pub static FALSE_EXPR: Expr<'static> = Expr::BoolLiteral(false);
-pub static ZERO_EXPR: Expr<'static> = Expr::IntLiteral { value: 0, base: 10 };
 
 #[derive(Debug)]
 pub struct Decl {
@@ -184,20 +196,20 @@ pub struct FuncSig {
 }
 
 #[derive(Debug)]
-pub enum Def<'a> {
-    Func { sig: FuncSig, body: &'a Command<'a> },
+pub enum Def {
+    Func { sig: FuncSig, body: CommandId },
     Record { name: Id, fields: Vec<Decl> },
 }
 
 #[derive(Debug)]
-pub enum Suffix<'a> {
-    Rotation(&'a Expr<'a>),
-    Aligned { factor: usize, e: &'a Expr<'a> },
+pub enum Suffix {
+    Rotation(ExprId),
+    Aligned { factor: usize, e: ExprId },
 }
 
 #[derive(Debug)]
-pub struct View<'a> {
-    pub suffix: Suffix<'a>,
+pub struct View {
+    pub suffix: Suffix,
     pub prefix: Option<usize>,
     pub shrink: Option<usize>,
 }
@@ -217,50 +229,60 @@ pub struct Include {
 }
 
 #[derive(Debug)]
-pub struct Program<'a> {
+pub struct Program {
     pub includes: Vec<Include>,
-    pub defs: Vec<Def<'a>>,
-    pub decors: Vec<&'a Command<'a>>,
+    pub defs: Vec<Def>,
+    pub decors: EntityList<CommandId>,
     pub decls: Vec<Decl>,
-    pub cmd: &'a Command<'a>,
+    pub cmd: CommandId,
 }
 
-impl Command<'_> {
-    pub fn smart_par<'a>(cmds: Vec<&'a Command<'a>>, bump: &'a Bump) -> &'a Command<'a> {
+impl Command {
+    pub fn smart_par(cmds: Vec<CommandId>, ast_data: &RefCell<AstData>) -> CommandId {
         let mut flat = Vec::new();
-        for cmd in cmds {
-            match cmd {
-                Command::Par(cs) => flat.extend(cs),
-                Command::Empty => (),
-                _ => flat.push(cmd),
+        {
+            let ast_data = ast_data.borrow();
+            for cmd in cmds {
+                match &ast_data.commands[cmd] {
+                    Command::Par(cs) => flat.extend(cs.as_slice(&ast_data.command_lists)),
+                    Command::Empty => (),
+                    _ => flat.push(cmd),
+                }
             }
         }
 
         if flat.is_empty() {
-            &EMPTY_CMD
+            ast_data.borrow_mut().commands.push(Command::Empty)
         } else if flat.len() == 1 {
             flat.remove(0)
         } else {
-            bump.alloc(Command::Par(flat))
+            let mut ast_data = ast_data.borrow_mut();
+            let cmds = EntityList::from_iter(flat, &mut ast_data.command_lists);
+            ast_data.commands.push(Command::Par(cmds))
         }
     }
 
-    pub fn smart_seq<'a>(cmds: Vec<&'a Command<'a>>, bump: &'a Bump) -> &'a Command<'a> {
+    pub fn smart_seq(cmds: Vec<CommandId>, ast_data: &RefCell<AstData>) -> CommandId {
         let mut flat = Vec::new();
-        for cmd in cmds {
-            match cmd {
-                Command::Seq(cs) => flat.extend(cs),
-                Command::Empty => (),
-                _ => flat.push(cmd),
+        {
+            let ast_data = ast_data.borrow();
+            for cmd in cmds {
+                match &ast_data.commands[cmd] {
+                    Command::Seq(cs) => flat.extend(cs.as_slice(&ast_data.command_lists)),
+                    Command::Empty => (),
+                    _ => flat.push(cmd),
+                }
             }
         }
 
         if flat.is_empty() {
-            &EMPTY_CMD
+            ast_data.borrow_mut().commands.push(Command::Empty)
         } else if flat.len() == 1 {
             flat.remove(0)
         } else {
-            bump.alloc(Command::Seq(flat))
+            let mut ast_data = ast_data.borrow_mut();
+            let cmds = EntityList::from_iter(flat, &mut ast_data.command_lists);
+            ast_data.commands.push(Command::Seq(cmds))
         }
     }
 }
