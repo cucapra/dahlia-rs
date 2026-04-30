@@ -1,12 +1,12 @@
 use std::cell::RefCell;
 
-use dahlia_rs::ast::AstData;
+use dahlia_rs::ast::Context;
 use dahlia_rs::parser::parse_dahlia;
 
 fn parse_ok(input: &str) {
-    let ast_data = RefCell::new(AstData::default());
+    let context = RefCell::new(Context::default());
     assert!(
-        parse_dahlia(input, &ast_data).is_ok(),
+        parse_dahlia(input, &context).is_ok(),
         "Failed to parse:\n{}",
         input
     );
