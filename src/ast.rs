@@ -329,8 +329,8 @@ pub struct ForRange {
 #[derive(Debug)]
 pub enum Command {
     Empty,
-    Par(EntityList<CommandId>),
-    Seq(EntityList<CommandId>),
+    Par(Vec<CommandId>),
+    Seq(Vec<CommandId>),
     Let {
         id: Id,
         ty: Option<TypeId>,
@@ -434,7 +434,7 @@ impl Command {
             let context = context.borrow();
             for cmd in cmds {
                 match &context.commands[cmd] {
-                    Command::Par(cs) => flat.extend(cs.as_slice(&context.command_lists)),
+                    Command::Par(cs) => flat.extend(cs),
                     Command::Empty => (),
                     _ => flat.push(cmd),
                 }
@@ -447,8 +447,7 @@ impl Command {
             flat.remove(0)
         } else {
             let mut context = context.borrow_mut();
-            let cmds = EntityList::from_iter(flat, &mut context.command_lists);
-            context.commands.push(Command::Par(cmds))
+            context.commands.push(Command::Par(flat))
         }
     }
 
@@ -458,7 +457,7 @@ impl Command {
             let context = context.borrow();
             for cmd in cmds {
                 match &context.commands[cmd] {
-                    Command::Seq(cs) => flat.extend(cs.as_slice(&context.command_lists)),
+                    Command::Seq(cs) => flat.extend(cs),
                     Command::Empty => (),
                     _ => flat.push(cmd),
                 }
@@ -471,8 +470,7 @@ impl Command {
             flat.remove(0)
         } else {
             let mut context = context.borrow_mut();
-            let cmds = EntityList::from_iter(flat, &mut context.command_lists);
-            context.commands.push(Command::Seq(cmds))
+            context.commands.push(Command::Seq(flat))
         }
     }
 }
