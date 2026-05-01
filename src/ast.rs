@@ -29,7 +29,7 @@ pub struct Context {
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub struct Id(pub String);
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Type {
     Float,
     Double,

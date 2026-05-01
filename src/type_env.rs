@@ -1,7 +1,7 @@
 use std::{collections::HashMap, error::Error, fmt::Display};
 
 use crate::{
-    ast::{Context, DimSpec, Id, Type, TypeId},
+    ast::{Context, Id, Type, TypeId},
     scoped_map::ScopedMap,
 };
 
@@ -50,38 +50,34 @@ impl TypeEnv {
         self.typedefs.get(id).copied()
     }
 
-    pub fn resolve_type(&self, typ: TypeId, context: &mut Context) -> Option<TypeId> {
-        enum TypeInfo {
-            Func(Vec<TypeId>, TypeId),
-            Array(TypeId, Vec<DimSpec>, usize),
-        }
-
-        let type_info = match context.types.get(typ)? {
+    pub fn resolve_type(&self, type_id: TypeId, context: &mut Context) -> Option<TypeId> {
+        let r#type = match context.types.get(type_id)? {
             Type::Alias(id) => return self.get_type(id),
-            Type::Func { args, ret } => {
-                TypeInfo::Func(args.as_slice(&context.type_lists).to_vec(), *ret)
-            }
-            Type::Array {
-                element_type,
-                dims,
-                ports,
-            } => TypeInfo::Array(*element_type, dims.clone(), *ports),
-            _ => return Some(typ),
+            func @ Type::Func { .. } => func.clone(),
+            arr @ Type::Array { .. } => arr.clone(),
+            _ => return Some(type_id),
         };
 
-        match type_info {
-            TypeInfo::Func(args, ret) => {
-                let resolved_args: Vec<TypeId> = args
+        match r#type {
+            Type::Func { args, ret } => {
+                let resolved_args: Vec<TypeId> =
+                    args.as_slice(&context.type_lists).iter().copied().collect();
+                let resolved_args = resolved_args
                     .into_iter()
                     .map(|arg| self.resolve_type(arg, context))
                     .collect::<Option<Vec<_>>>()?;
                 let resolved_ret = self.resolve_type(ret, context)?;
                 Some(context.get_func(resolved_args, resolved_ret))
             }
-            TypeInfo::Array(element_type, dims, ports) => {
+            Type::Array {
+                element_type,
+                dims,
+                ports,
+            } => {
                 let resolved_element_type = self.resolve_type(element_type, context)?;
                 Some(context.get_array(resolved_element_type, dims, ports))
             }
+            _ => unreachable!(),
         }
     }
 
@@ -89,11 +85,16 @@ impl TypeEnv {
         self.type_map.get(id).copied()
     }
 
-    pub fn add(&mut self, id: Id, typ: TypeId, context: &mut Context) -> Result<(), TypeEnvError> {
+    pub fn add(
+        &mut self,
+        id: Id,
+        type_id: TypeId,
+        context: &mut Context,
+    ) -> Result<(), TypeEnvError> {
         self.type_map
             .add(
                 id,
-                self.resolve_type(typ, context)
+                self.resolve_type(type_id, context)
                     .expect("Type should resolve"),
             )
             .map_err(|_| TypeEnvError::AlreadyBound)
