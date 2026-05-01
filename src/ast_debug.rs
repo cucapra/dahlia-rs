@@ -25,7 +25,7 @@ enum DebugType<'a> {
         dims: &'a [DimSpec],
         ports: usize,
     },
-    StaticInt(u64),
+    StaticInt(i64),
     Index {
         static_: (i64, i64),
         dynamic: (i64, i64),

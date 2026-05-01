@@ -49,7 +49,7 @@ pub enum Type {
         dims: Vec<DimSpec>,
         ports: usize,
     },
-    StaticInt(u64), // the original Scala repo only seems to use this for unsigned bit types
+    StaticInt(i64), // the original Scala repo only seems to use this for unsigned bit types
     Index {
         static_: (i64, i64),
         dynamic: (i64, i64),
@@ -86,7 +86,7 @@ pub enum TypeKey {
         dims: Vec<DimSpec>,
         ports: usize,
     },
-    StaticInt(u64),
+    StaticInt(i64),
     Index {
         static_: (i64, i64),
         dynamic: (i64, i64),
@@ -179,7 +179,7 @@ impl Context {
             .clone()
     }
 
-    pub fn get_static_int(&mut self, value: u64) -> TypeId {
+    pub fn get_static_int(&mut self, value: i64) -> TypeId {
         self
             .type_map
             .entry(TypeKey::StaticInt(value))
