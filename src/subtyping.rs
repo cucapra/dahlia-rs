@@ -1,6 +1,6 @@
 use std::ops::{Add, Div, Mul, Rem, Sub};
 
-use crate::ast::{Context, InfixOp, Type, TypeId};
+use crate::ast::{InfixOp, Type, TypeContext, TypeId};
 
 fn bits_needed(n: i64) -> usize {
     match n {
@@ -10,12 +10,12 @@ fn bits_needed(n: i64) -> usize {
     }
 }
 
-pub fn is_subtype(tid1: TypeId, tid2: TypeId, context: &Context) -> bool {
-    let t1 = context
+pub fn is_subtype(tid1: TypeId, tid2: TypeId, tcx: &TypeContext) -> bool {
+    let t1 = tcx
         .types
         .get(tid1)
         .expect("Type ID not found in context");
-    let t2 = context
+    let t2 = tcx
         .types
         .get(tid2)
         .expect("Type ID not found in context");
@@ -99,13 +99,13 @@ fn join_of_helper(
     tid1: TypeId,
     tid2: TypeId,
     op: InfixOp,
-    context: &mut Context,
+    tcx: &mut TypeContext,
 ) -> Option<TypeId> {
-    let t1 = context
+    let t1 = tcx
         .types
         .get(tid1)
         .expect("Type ID not found in context");
-    let t2 = context
+    let t2 = tcx
         .types
         .get(tid2)
         .expect("Type ID not found in context");
@@ -113,21 +113,21 @@ fn join_of_helper(
     match (t1, t2) {
         (Type::StaticInt(v1), Type::StaticInt(v2)) => {
             if let Some(val) = eval_op(op, *v1, *v2) {
-                Some(context.get_static_int(val))
+                Some(tcx.get_static_int(val))
             } else {
-                Some(context.get_bit(bits_needed(*v1).max(bits_needed(*v2)), false))
+                Some(tcx.get_bit(bits_needed(*v1).max(bits_needed(*v2)), false))
             }
         }
         (Type::Rational(v1), Type::Rational(v2)) => {
             let v1: f64 = v1.parse().expect("Invalid rational number");
             let v2: f64 = v2.parse().expect("Invalid rational number");
             if let Some(val) = eval_op(op, v1, v2) {
-                Some(context.get_rational(val.to_string()))
+                Some(tcx.get_rational(val.to_string()))
             } else {
                 if bits_needed(v1 as i64) > bits_needed(v2 as i64) {
-                    Some(context.get_rational(v1.to_string()))
+                    Some(tcx.get_rational(v1.to_string()))
                 } else {
-                    Some(context.get_rational(v2.to_string()))
+                    Some(tcx.get_rational(v2.to_string()))
                 }
             }
         }
@@ -142,7 +142,7 @@ fn join_of_helper(
             },
         ) => {
             if un1 == un2 {
-                Some(context.get_bit(*s1.max(s2), *un1))
+                Some(tcx.get_bit(*s1.max(s2), *un1))
             } else {
                 None
             }
@@ -153,14 +153,14 @@ fn join_of_helper(
                 unsigned: un,
             },
             Type::StaticInt(v),
-        ) => Some(context.get_bit(bits_needed(*v).max(*s), *un)),
+        ) => Some(tcx.get_bit(bits_needed(*v).max(*s), *un)),
         (Type::StaticInt(v), Type::Index { static_, dynamic }) => {
             let max_val = static_.1 * dynamic.1 - 1;
-            Some(context.get_bit(bits_needed(*v.max(&max_val)), false))
+            Some(tcx.get_bit(bits_needed(*v.max(&max_val)), false))
         }
         (Type::Bit { .. }, Type::Index { .. }) => Some(tid1),
-        (Type::Float | Type::Rational(..), Type::Double) => Some(context.get_double()),
-        (Type::Rational(..), Type::Float) => Some(context.get_float()),
+        (Type::Float | Type::Rational(..), Type::Double) => Some(tcx.get_double()),
+        (Type::Rational(..), Type::Float) => Some(tcx.get_float()),
         (
             Type::Rational(v1),
             Type::Fixed {
@@ -170,7 +170,7 @@ fn join_of_helper(
             },
         ) => {
             let v1 = v1.parse::<f64>().expect("Invalid rational number") as i64;
-            Some(context.get_fixed(
+            Some(tcx.get_fixed(
                 *i2.max(&bits_needed(v1)) + t2 - i2,
                 *i2.max(&bits_needed(v1)),
                 *un2,
@@ -189,7 +189,7 @@ fn join_of_helper(
             },
         ) => {
             if un1 == un2 {
-                Some(context.get_fixed(i1.max(i2) + (t1 - i1).max(t2 - i2), *i1.max(i2), *un1))
+                Some(tcx.get_fixed(i1.max(i2) + (t1 - i1).max(t2 - i2), *i1.max(i2), *un1))
             } else {
                 None
             }
@@ -206,7 +206,7 @@ fn join_of_helper(
         ) => {
             let max_val1 = s1.1 * d1.1 - 1;
             let max_val2 = s2.1 * d2.1 - 1;
-            Some(context.get_bit(bits_needed(max_val1).max(bits_needed(max_val2)), false))
+            Some(tcx.get_bit(bits_needed(max_val1).max(bits_needed(max_val2)), false))
         }
         (_, _) => {
             if tid1 == tid2 {
@@ -218,27 +218,27 @@ fn join_of_helper(
     }
 }
 
-pub fn join_of(tid1: TypeId, tid2: TypeId, op: InfixOp, context: &mut Context) -> Option<TypeId> {
-    if let Some(join) = join_of_helper(tid1, tid2, op.clone(), context) {
+pub fn join_of(tid1: TypeId, tid2: TypeId, op: InfixOp, tcx: &mut TypeContext) -> Option<TypeId> {
+    if let Some(join) = join_of_helper(tid1, tid2, op.clone(), tcx) {
         Some(join)
     } else {
-        join_of_helper(tid2, tid1, op, context)
+        join_of_helper(tid2, tid1, op, tcx)
     }
 }
 
-pub fn safe_cast(tid_from: TypeId, tid_to: TypeId, context: &Context) -> bool {
-    let tfrom = context
+pub fn safe_cast(tid_from: TypeId, tid_to: TypeId, tcx: &TypeContext) -> bool {
+    let tfrom = tcx
         .types
         .get(tid_from)
         .expect("Type ID not found in context");
-    let tto = context
+    let tto = tcx
         .types
         .get(tid_to)
         .expect("Type ID not found in context");
 
     match (tfrom, tto) {
         (Type::StaticInt(..) | Type::Index { .. } | Type::Bit { .. }, Type::Bit { .. }) => {
-            is_subtype(tid_from, tid_to, context)
+            is_subtype(tid_from, tid_to, tcx)
         }
         (Type::Float | Type::Double | Type::Rational(_), Type::Bit { .. }) => false,
         (Type::StaticInt(..) | Type::Index { .. } | Type::Bit { .. }, Type::Float) => true,

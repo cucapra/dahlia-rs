@@ -1,9 +1,9 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use cranelift_entity::{EntityList, ListPool, PrimaryMap, entity_impl};
+use cranelift_entity::{EntityList, ListPool, PrimaryMap, SecondaryMap, entity_impl};
 
-#[derive(Clone, Copy, Hash, Eq, PartialEq)]
+#[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord)]
 pub struct ExprId(u32);
 entity_impl!(ExprId, "expr");
 
@@ -11,23 +11,37 @@ entity_impl!(ExprId, "expr");
 pub struct CommandId(u32);
 entity_impl!(CommandId, "cmd");
 
-#[derive(Clone, Copy, Hash, Eq, PartialEq)]
+#[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord)]
+pub struct Id(u32);
+entity_impl!(Id, "id");
+
+#[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord, Default)]
 pub struct TypeId(u32);
 entity_impl!(TypeId, "typ");
 
 #[derive(Debug, Default)]
-pub struct Context {
+pub struct Ast {
     pub exprs: PrimaryMap<ExprId, Expr>,
     pub commands: PrimaryMap<CommandId, Command>,
     pub expr_lists: ListPool<ExprId>,
     pub command_lists: ListPool<CommandId>,
+    pub ids: PrimaryMap<Id, String>,
+}
+
+#[derive(Debug, Default)]
+pub struct TypeContext {
     pub types: PrimaryMap<TypeId, Type>,
     pub type_lists: ListPool<TypeId>,
     pub type_map: HashMap<TypeKey, TypeId>,
+    pub id_type_map: SecondaryMap<Id, TypeId>,
+    pub expr_type_map: SecondaryMap<ExprId, TypeId>,
 }
 
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
-pub struct Id(pub String);
+#[derive(Debug, Default)]
+pub struct Context {
+    pub ast: Ast,
+    pub tcx: TypeContext,
+}
 
 #[derive(Debug, Clone)]
 pub enum Type {
@@ -49,7 +63,7 @@ pub enum Type {
         dims: Vec<DimSpec>,
         ports: usize,
     },
-    StaticInt(i64), // the original Scala repo only seems to use this for unsigned bit types
+    StaticInt(i64),
     Index {
         static_: (i64, i64),
         dynamic: (i64, i64),
@@ -103,7 +117,7 @@ pub enum TypeKey {
     },
 }
 
-impl Context {
+impl TypeContext {
     pub fn get_float(&mut self) -> TypeId {
         self.type_map
             .entry(TypeKey::Float)
@@ -217,10 +231,13 @@ impl Context {
     }
 
     pub fn get_rec_type(&mut self, name: Id, fields: HashMap<Id, TypeId>) -> TypeId {
+        let mut field_key: Vec<_> = fields.iter().map(|(k, v)| (k.clone(), *v)).collect();
+        field_key.sort();
+
         self.type_map
             .entry(TypeKey::RecType {
                 name: name.clone(),
-                fields: fields.iter().map(|(k, v)| (k.clone(), *v)).collect(),
+                fields: field_key,
             })
             .or_insert_with(|| self.types.push(Type::RecType { name, fields }))
             .clone()
@@ -295,7 +312,7 @@ pub enum Expr {
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum AssignOp {
     Assign,
     AddAssign,
@@ -370,13 +387,19 @@ pub struct Decl {
 pub struct FuncSig {
     pub name: Id,
     pub args: Vec<Decl>,
-    pub ret_ty: Option<TypeId>,
+    pub ret_ty: TypeId,
 }
 
 #[derive(Debug)]
 pub enum Def {
-    Func { sig: FuncSig, body: CommandId },
-    Record { name: Id, fields: Vec<Decl> },
+    Func {
+        sig: FuncSig,
+        body: CommandId,
+    },
+    Record {
+        name: Id,
+        fields: HashMap<Id, TypeId>,
+    },
 }
 
 #[derive(Debug)]
@@ -403,7 +426,7 @@ pub enum Backend {
 #[derive(Debug)]
 pub struct Include {
     pub backends: Vec<(Backend, String)>,
-    pub defs: Vec<FuncSig>,
+    pub defs: Vec<Def>,
 }
 
 #[derive(Debug)]
@@ -421,7 +444,7 @@ impl Command {
         {
             let context = context.borrow();
             for cmd in cmds {
-                match &context.commands[cmd] {
+                match &context.ast.commands[cmd] {
                     Command::Par(cs) => flat.extend(cs),
                     Command::Empty => (),
                     _ => flat.push(cmd),
@@ -430,12 +453,12 @@ impl Command {
         }
 
         if flat.is_empty() {
-            context.borrow_mut().commands.push(Command::Empty)
+            context.borrow_mut().ast.commands.push(Command::Empty)
         } else if flat.len() == 1 {
             flat.remove(0)
         } else {
             let mut context = context.borrow_mut();
-            context.commands.push(Command::Par(flat))
+            context.ast.commands.push(Command::Par(flat))
         }
     }
 
@@ -444,7 +467,7 @@ impl Command {
         {
             let context = context.borrow();
             for cmd in cmds {
-                match &context.commands[cmd] {
+                match &context.ast.commands[cmd] {
                     Command::Seq(cs) => flat.extend(cs),
                     Command::Empty => (),
                     _ => flat.push(cmd),
@@ -453,12 +476,12 @@ impl Command {
         }
 
         if flat.is_empty() {
-            context.borrow_mut().commands.push(Command::Empty)
+            context.borrow_mut().ast.commands.push(Command::Empty)
         } else if flat.len() == 1 {
             flat.remove(0)
         } else {
             let mut context = context.borrow_mut();
-            context.commands.push(Command::Seq(flat))
+            context.ast.commands.push(Command::Seq(flat))
         }
     }
 }

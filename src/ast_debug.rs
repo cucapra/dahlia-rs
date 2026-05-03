@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+use std::collections::HashMap;
+
 use crate::ast::{
     AssignOp, Backend, Command, CommandId, Context, Decl, Def, DimSpec, Expr, ExprId, ForRange,
     FuncSig, Id, Include, InfixOp, Program, Suffix, Type, TypeId, View,
@@ -19,7 +21,7 @@ enum DebugType<'a> {
         length_int: usize,
         unsigned: bool,
     },
-    Alias(&'a Id),
+    Alias(&'a str),
     Array {
         element_type: Box<DebugType<'a>>,
         dims: &'a [DimSpec],
@@ -37,8 +39,8 @@ enum DebugType<'a> {
         ret: Box<DebugType<'a>>,
     },
     RecType {
-        name: &'a Id,
-        fields: Vec<(&'a Id, DebugType<'a>)>,
+        name: &'a str,
+        fields: Vec<(&'a str, DebugType<'a>)>,
     },
 }
 
@@ -50,7 +52,7 @@ enum DebugExpr<'a> {
     },
 
     ArrayLiteral(Vec<DebugExpr<'a>>),
-    RecordLiteral(Vec<(&'a Id, DebugExpr<'a>)>),
+    RecordLiteral(Vec<(&'a str, DebugExpr<'a>)>),
 
     RationalLiteral(&'a str),
     IntLiteral {
@@ -60,20 +62,20 @@ enum DebugExpr<'a> {
     BoolLiteral(bool),
 
     ArrayAccess {
-        array: &'a Id,
+        array: &'a str,
         indices: Vec<DebugExpr<'a>>,
     },
     RecordAccess {
         record: Box<DebugExpr<'a>>,
-        field: &'a Id,
+        field: &'a str,
     },
 
     Application {
-        func: &'a Id,
+        func: &'a str,
         args: Vec<DebugExpr<'a>>,
     },
 
-    Id(&'a Id),
+    Id(&'a str),
 
     BinOp {
         left: Box<DebugExpr<'a>>,
@@ -84,7 +86,7 @@ enum DebugExpr<'a> {
 
 #[derive(Debug)]
 struct DebugForRange<'a> {
-    id: &'a Id,
+    id: &'a str,
     ty: Option<DebugType<'a>>,
     rev: bool,
     start: usize,
@@ -98,7 +100,7 @@ enum DebugCommand<'a> {
     Par(Vec<DebugCommand<'a>>),
     Seq(Vec<DebugCommand<'a>>),
     Let {
-        id: &'a Id,
+        id: &'a str,
         ty: Option<DebugType<'a>>,
         value: Option<DebugExpr<'a>>,
     },
@@ -108,13 +110,13 @@ enum DebugCommand<'a> {
         rhs: DebugExpr<'a>,
     },
     View {
-        id: &'a Id,
-        arr_id: &'a Id,
+        id: &'a str,
+        arr_id: &'a str,
         dims: Vec<DebugView<'a>>,
     },
     Split {
-        id: &'a Id,
-        arr_id: &'a Id,
+        id: &'a str,
+        arr_id: &'a str,
         dims: &'a [usize],
     },
     Return(DebugExpr<'a>),
@@ -140,15 +142,15 @@ enum DebugCommand<'a> {
 
 #[derive(Debug)]
 struct DebugDecl<'a> {
-    id: &'a Id,
+    id: &'a str,
     ty: DebugType<'a>,
 }
 
 #[derive(Debug)]
 struct DebugFuncSig<'a> {
-    name: &'a Id,
+    name: &'a str,
     args: Vec<DebugDecl<'a>>,
-    ret_ty: Option<DebugType<'a>>,
+    ret_ty: DebugType<'a>,
 }
 
 #[derive(Debug)]
@@ -158,8 +160,8 @@ enum DebugDef<'a> {
         body: DebugCommand<'a>,
     },
     Record {
-        name: &'a Id,
-        fields: Vec<DebugDecl<'a>>,
+        name: &'a str,
+        fields: HashMap<&'a str, DebugType<'a>>,
     },
 }
 
@@ -179,7 +181,7 @@ struct DebugView<'a> {
 #[derive(Debug)]
 struct DebugInclude<'a> {
     backends: Vec<(&'a Backend, &'a str)>,
-    defs: Vec<DebugFuncSig<'a>>,
+    defs: Vec<DebugDef<'a>>,
 }
 
 #[derive(Debug)]
@@ -195,6 +197,10 @@ pub fn ast_debug(context: &Context, program: &Program) {
     println!("{:#?}", debug_program(context, program));
 }
 
+fn resolve(context: &Context, id: Id) -> &str {
+    context.ast.ids[id].as_str()
+}
+
 fn debug_program<'a>(context: &'a Context, program: &'a Program) -> DebugProgram<'a> {
     DebugProgram {
         includes: program
@@ -207,7 +213,7 @@ fn debug_program<'a>(context: &'a Context, program: &'a Program) -> DebugProgram
             .iter()
             .map(|def| debug_def(context, def))
             .collect(),
-        decors: debug_command_list(context, program.decors.as_slice(&context.command_lists)),
+        decors: debug_command_list(context, program.decors.as_slice(&context.ast.command_lists)),
         decls: program
             .decls
             .iter()
@@ -227,7 +233,7 @@ fn debug_include<'a>(context: &'a Context, include: &'a Include) -> DebugInclude
         defs: include
             .defs
             .iter()
-            .map(|sig| debug_func_sig(context, sig))
+            .map(|def| debug_def(context, def))
             .collect(),
     }
 }
@@ -239,17 +245,17 @@ fn debug_def<'a>(context: &'a Context, def: &'a Def) -> DebugDef<'a> {
             body: debug_command_id(context, *body),
         },
         Def::Record { name, fields } => DebugDef::Record {
-            name,
-            fields: debug_decl_list(context, fields),
+            name: resolve(context, *name),
+            fields: debug_field_map(context, fields),
         },
     }
 }
 
 fn debug_func_sig<'a>(context: &'a Context, sig: &'a FuncSig) -> DebugFuncSig<'a> {
     DebugFuncSig {
-        name: &sig.name,
+        name: resolve(context, sig.name),
         args: debug_decl_list(context, &sig.args),
-        ret_ty: sig.ret_ty.map(|ty| debug_type_id(context, ty)),
+        ret_ty: debug_type_id(context, sig.ret_ty),
     }
 }
 
@@ -259,9 +265,19 @@ fn debug_decl_list<'a>(context: &'a Context, decls: &'a [Decl]) -> Vec<DebugDecl
 
 fn debug_decl<'a>(context: &'a Context, decl: &'a Decl) -> DebugDecl<'a> {
     DebugDecl {
-        id: &decl.id,
+        id: resolve(context, decl.id),
         ty: debug_type_id(context, decl.ty),
     }
+}
+
+fn debug_field_map<'a>(
+    context: &'a Context,
+    fields: &'a HashMap<Id, TypeId>,
+) -> HashMap<&'a str, DebugType<'a>> {
+    fields
+        .iter()
+        .map(|(id, ty)| (resolve(context, *id), debug_type_id(context, *ty)))
+        .collect()
 }
 
 fn debug_view<'a>(context: &'a Context, view: &'a View) -> DebugView<'a> {
@@ -284,7 +300,7 @@ fn debug_suffix<'a>(context: &'a Context, suffix: &'a Suffix) -> DebugSuffix<'a>
 
 fn debug_for_range<'a>(context: &'a Context, range: &'a ForRange) -> DebugForRange<'a> {
     DebugForRange {
-        id: &range.id,
+        id: resolve(context, range.id),
         ty: range.ty.map(|ty| debug_type_id(context, ty)),
         rev: range.rev,
         start: range.start,
@@ -294,7 +310,7 @@ fn debug_for_range<'a>(context: &'a Context, range: &'a ForRange) -> DebugForRan
 }
 
 fn debug_command_id<'a>(context: &'a Context, command: CommandId) -> DebugCommand<'a> {
-    debug_command(context, &context.commands[command])
+    debug_command(context, &context.ast.commands[command])
 }
 
 fn debug_command_list<'a>(context: &'a Context, commands: &[CommandId]) -> Vec<DebugCommand<'a>> {
@@ -310,7 +326,7 @@ fn debug_command<'a>(context: &'a Context, command: &'a Command) -> DebugCommand
         Command::Par(commands) => DebugCommand::Par(debug_command_list(context, commands)),
         Command::Seq(commands) => DebugCommand::Seq(debug_command_list(context, commands)),
         Command::Let { id, ty, value } => DebugCommand::Let {
-            id,
+            id: resolve(context, *id),
             ty: ty.map(|ty| debug_type_id(context, ty)),
             value: value.map(|expr| debug_expr_id(context, expr)),
         },
@@ -320,11 +336,15 @@ fn debug_command<'a>(context: &'a Context, command: &'a Command) -> DebugCommand
             rhs: debug_expr_id(context, *rhs),
         },
         Command::View { id, arr_id, dims } => DebugCommand::View {
-            id,
-            arr_id,
+            id: resolve(context, *id),
+            arr_id: resolve(context, *arr_id),
             dims: dims.iter().map(|view| debug_view(context, view)).collect(),
         },
-        Command::Split { id, arr_id, dims } => DebugCommand::Split { id, arr_id, dims },
+        Command::Split { id, arr_id, dims } => DebugCommand::Split {
+            id: resolve(context, *id),
+            arr_id: resolve(context, *arr_id),
+            dims,
+        },
         Command::Return(expr) => DebugCommand::Return(debug_expr_id(context, *expr)),
         Command::IfElse { cond, then, else_ } => DebugCommand::IfElse {
             cond: debug_expr_id(context, *cond),
@@ -357,7 +377,7 @@ fn debug_command<'a>(context: &'a Context, command: &'a Command) -> DebugCommand
 }
 
 fn debug_expr_id<'a>(context: &'a Context, expr: ExprId) -> DebugExpr<'a> {
-    debug_expr(context, &context.exprs[expr])
+    debug_expr(context, &context.ast.exprs[expr])
 }
 
 fn debug_expr_list<'a>(context: &'a Context, exprs: &[ExprId]) -> Vec<DebugExpr<'a>> {
@@ -375,10 +395,10 @@ fn debug_expr<'a>(context: &'a Context, expr: &'a Expr) -> DebugExpr<'a> {
         },
         Expr::ArrayLiteral(elements) => DebugExpr::ArrayLiteral(debug_expr_list(
             context,
-            elements.as_slice(&context.expr_lists),
+            elements.as_slice(&context.ast.expr_lists),
         )),
         Expr::RecordLiteral(fields) => DebugExpr::RecordLiteral(
-            sorted_entries(fields)
+            sorted_entries(context, fields)
                 .into_iter()
                 .map(|(id, expr)| (id, debug_expr_id(context, *expr)))
                 .collect(),
@@ -390,18 +410,18 @@ fn debug_expr<'a>(context: &'a Context, expr: &'a Expr) -> DebugExpr<'a> {
         },
         Expr::BoolLiteral(value) => DebugExpr::BoolLiteral(*value),
         Expr::ArrayAccess { array, indices } => DebugExpr::ArrayAccess {
-            array,
-            indices: debug_expr_list(context, indices.as_slice(&context.expr_lists)),
+            array: resolve(context, *array),
+            indices: debug_expr_list(context, indices.as_slice(&context.ast.expr_lists)),
         },
         Expr::RecordAccess { record, field } => DebugExpr::RecordAccess {
             record: Box::new(debug_expr_id(context, *record)),
-            field,
+            field: resolve(context, *field),
         },
         Expr::Application { func, args } => DebugExpr::Application {
-            func,
-            args: debug_expr_list(context, args.as_slice(&context.expr_lists)),
+            func: resolve(context, *func),
+            args: debug_expr_list(context, args.as_slice(&context.ast.expr_lists)),
         },
-        Expr::Id(id) => DebugExpr::Id(id),
+        Expr::Id(id) => DebugExpr::Id(resolve(context, *id)),
         Expr::BinOp { left, op, right } => DebugExpr::BinOp {
             left: Box::new(debug_expr_id(context, *left)),
             op,
@@ -411,7 +431,7 @@ fn debug_expr<'a>(context: &'a Context, expr: &'a Expr) -> DebugExpr<'a> {
 }
 
 fn debug_type_id<'a>(context: &'a Context, ty: TypeId) -> DebugType<'a> {
-    debug_type(context, &context.types[ty])
+    debug_type(context, &context.tcx.types[ty])
 }
 
 fn debug_type_list<'a>(context: &'a Context, types: &[TypeId]) -> Vec<DebugType<'a>> {
@@ -436,7 +456,7 @@ fn debug_type<'a>(context: &'a Context, ty: &'a Type) -> DebugType<'a> {
             length_int: *length_int,
             unsigned: *unsigned,
         },
-        Type::Alias(name) => DebugType::Alias(name),
+        Type::Alias(name) => DebugType::Alias(resolve(context, *name)),
         Type::Array {
             element_type,
             dims,
@@ -454,12 +474,12 @@ fn debug_type<'a>(context: &'a Context, ty: &'a Type) -> DebugType<'a> {
         Type::Void => DebugType::Void,
         Type::Rational(value) => DebugType::Rational(value),
         Type::Func { args, ret } => DebugType::Func {
-            args: debug_type_list(context, args.as_slice(&context.type_lists)),
+            args: debug_type_list(context, args.as_slice(&context.tcx.type_lists)),
             ret: Box::new(debug_type_id(context, *ret)),
         },
         Type::RecType { name, fields } => DebugType::RecType {
-            name,
-            fields: sorted_entries(fields)
+            name: resolve(context, *name),
+            fields: sorted_entries(context, fields)
                 .into_iter()
                 .map(|(id, ty)| (id, debug_type_id(context, *ty)))
                 .collect(),
@@ -467,8 +487,17 @@ fn debug_type<'a>(context: &'a Context, ty: &'a Type) -> DebugType<'a> {
     }
 }
 
-fn sorted_entries<V>(fields: &std::collections::HashMap<Id, V>) -> Vec<(&Id, &V)> {
-    let mut fields: Vec<_> = fields.iter().collect();
-    fields.sort_by(|(left, _), (right, _)| left.0.cmp(&right.0));
+fn sorted_entries<'a, V>(
+    context: &'a Context,
+    fields: &'a HashMap<Id, V>,
+) -> Vec<(&'a str, &'a V)>
+where
+    V: Ord,
+{
+    let mut fields: Vec<_> = fields
+        .iter()
+        .map(|(id, v)| (resolve(context, *id), v))
+        .collect();
+    fields.sort();
     fields
 }

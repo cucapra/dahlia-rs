@@ -1,7 +1,7 @@
 use std::{collections::HashMap, error::Error, fmt::Display};
 
 use crate::{
-    ast::{Context, Id, Type, TypeId},
+    ast::{Id, Type, TypeContext, TypeId},
     scoped_map::ScopedMap,
 };
 
@@ -50,8 +50,8 @@ impl TypeEnv {
         self.typedefs.get(id).copied()
     }
 
-    pub fn resolve_type(&self, type_id: TypeId, context: &mut Context) -> Option<TypeId> {
-        let r#type = match context.types.get(type_id)? {
+    pub fn resolve_type(&self, type_id: TypeId, tcx: &mut TypeContext) -> Option<TypeId> {
+        let r#type = match tcx.types.get(type_id)? {
             Type::Alias(id) => return self.get_type(id),
             func @ Type::Func { .. } => func.clone(),
             arr @ Type::Array { .. } => arr.clone(),
@@ -61,21 +61,21 @@ impl TypeEnv {
         match r#type {
             Type::Func { args, ret } => {
                 let resolved_args: Vec<TypeId> =
-                    args.as_slice(&context.type_lists).iter().copied().collect();
+                    args.as_slice(&tcx.type_lists).iter().copied().collect();
                 let resolved_args = resolved_args
                     .into_iter()
-                    .map(|arg| self.resolve_type(arg, context))
+                    .map(|arg| self.resolve_type(arg, tcx))
                     .collect::<Option<Vec<_>>>()?;
-                let resolved_ret = self.resolve_type(ret, context)?;
-                Some(context.get_func(resolved_args, resolved_ret))
+                let resolved_ret = self.resolve_type(ret, tcx)?;
+                Some(tcx.get_func(resolved_args, resolved_ret))
             }
             Type::Array {
                 element_type,
                 dims,
                 ports,
             } => {
-                let resolved_element_type = self.resolve_type(element_type, context)?;
-                Some(context.get_array(resolved_element_type, dims, ports))
+                let resolved_element_type = self.resolve_type(element_type, tcx)?;
+                Some(tcx.get_array(resolved_element_type, dims, ports))
             }
             _ => unreachable!(),
         }
@@ -89,12 +89,12 @@ impl TypeEnv {
         &mut self,
         id: Id,
         type_id: TypeId,
-        context: &mut Context,
+        tcx: &mut TypeContext,
     ) -> Result<(), TypeEnvError> {
         self.type_map
             .add(
                 id,
-                self.resolve_type(type_id, context)
+                self.resolve_type(type_id, tcx)
                     .expect("Type should resolve"),
             )
             .map_err(|_| TypeEnvError::AlreadyBound)
@@ -108,10 +108,11 @@ impl TypeEnv {
         self.type_map.pop_scope();
     }
 
-    pub fn with_scope(&mut self, f: impl FnOnce(&mut Self)) {
+    pub fn with_scope<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
         self.push_scope();
-        f(self);
+        let result = f(self);
         self.pop_scope();
+        result
     }
 
     pub fn set_ret_type(&mut self, ret_type: TypeId) {
