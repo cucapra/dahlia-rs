@@ -3,6 +3,8 @@ use std::{
     fmt::{Display, Formatter},
 };
 
+use anyhow::{Result, anyhow, bail};
+
 use crate::{
     ast::{
         Ast, Command, CommandId, Def, Expr, ExprId, FuncSig, InfixOp, Program, Type, TypeContext,
@@ -69,11 +71,7 @@ impl Display for TypecheckError {
 
 impl std::error::Error for TypecheckError {}
 
-pub fn typecheck(
-    program: &Program,
-    ast: &mut Ast,
-    tcx: &mut TypeContext,
-) -> Result<(), TypecheckError> {
+pub fn typecheck(program: &Program, ast: &mut Ast, tcx: &mut TypeContext) -> Result<()> {
     let mut env = TypeEnv::new();
 
     let all_defs: Vec<_> = program
@@ -105,12 +103,7 @@ pub fn typecheck(
     Ok(())
 }
 
-fn check_def(
-    def: &Def,
-    env: &mut TypeEnv,
-    ast: &Ast,
-    tcx: &mut TypeContext,
-) -> Result<(), TypecheckError> {
+fn check_def(def: &Def, env: &mut TypeEnv, ast: &Ast, tcx: &mut TypeContext) -> Result<()> {
     match def {
         Def::Record { name, fields } => {
             let resolved_fields = fields
@@ -128,7 +121,7 @@ fn check_def(
             .map_err(|_| TypecheckError::AlreadyBound)?;
         }
         Def::Func { sig, body } => {
-            env.with_scope(|env| {
+            env.with_scope(|env| -> Result<()> {
                 // add args to env
                 for decl in &sig.args {
                     let resolved_ty = env
@@ -162,9 +155,9 @@ fn check_def(
     Ok(())
 }
 
-fn check_pipeline(enabled: bool, body: CommandId, ast: &Ast) -> Result<(), TypecheckError> {
+fn check_pipeline(enabled: bool, body: CommandId, ast: &Ast) -> Result<()> {
     match &ast.commands[body] {
-        Command::Seq(..) if enabled => Err(TypecheckError::PipelineError),
+        Command::Seq(..) if enabled => Err(anyhow!(TypecheckError::PipelineError)),
         _ => Ok(()),
     }
 }
@@ -174,7 +167,7 @@ fn check_command(
     env: &mut TypeEnv,
     ast: &Ast,
     tcx: &mut TypeContext,
-) -> Result<(), TypecheckError> {
+) -> Result<()> {
     match &ast.commands[cmd] {
         Command::Empty => Ok(()),
         Command::Par(cmds) | Command::Seq(cmds) => {
@@ -186,7 +179,7 @@ fn check_command(
         Command::IfElse { cond, then, else_ } => {
             let cond_ty = check_expr(*cond, env, ast, tcx)?;
             if cond_ty != tcx.get_bool() {
-                return Err(TypecheckError::UnexpectedType);
+                bail!(TypecheckError::UnexpectedType);
             }
 
             env.with_scope(|env| check_command(*then, env, ast, tcx))?;
@@ -228,7 +221,7 @@ fn check_command(
 
             let cond_ty = check_expr(*cond, env, ast, tcx)?;
             if cond_ty != tcx.get_bool() {
-                return Err(TypecheckError::UnexpectedType);
+                bail!(TypecheckError::UnexpectedType);
             }
 
             env.with_scope(|env| check_command(*body, env, ast, tcx))?;
@@ -240,7 +233,7 @@ fn check_command(
             let rhs_ty = check_expr(*rhs, env, ast, tcx)?;
 
             if !is_subtype(rhs_ty, lhs_ty, tcx) {
-                return Err(TypecheckError::UnexpectedType);
+                bail!(TypecheckError::UnexpectedType);
             }
             Ok(())
         }
@@ -264,23 +257,23 @@ fn check_command(
                                     .map(|d| d.length)
                                     .ok_or(TypecheckError::InvalidArrayDims)?,
                             ),
-                            _ => return Err(TypecheckError::UnexpectedType),
+                            _ => bail!(TypecheckError::UnexpectedType),
                         };
 
                         if dims_len != 1 {
-                            return Err(TypecheckError::Unsupported(
+                            bail!(TypecheckError::Unsupported(
                                 "Multidimensional array literals",
                             ));
                         }
 
                         if first_dim_len != vals.len(&ast.expr_lists) {
-                            return Err(TypecheckError::LiteralLengthMismatch);
+                            bail!(TypecheckError::LiteralLengthMismatch);
                         }
 
                         for val in vals.as_slice(&ast.expr_lists).iter() {
                             let val_ty = check_expr(*val, env, ast, tcx)?;
                             if !is_subtype(val_ty, element_type, tcx) {
-                                return Err(TypecheckError::UnexpectedType);
+                                bail!(TypecheckError::UnexpectedType);
                             }
                         }
 
@@ -303,7 +296,7 @@ fn check_command(
 
                         let expected_fields = match &tcx.types[resolved_ty] {
                             Type::RecType { fields, .. } => fields,
-                            _ => return Err(TypecheckError::UnexpectedType),
+                            _ => bail!(TypecheckError::UnexpectedType),
                         };
 
                         for (expected_id, expected_ty) in expected_fields {
@@ -312,12 +305,12 @@ fn check_command(
                                 .ok_or(TypecheckError::MissingField)?;
 
                             if !is_subtype(actual_ty, *expected_ty, tcx) {
-                                return Err(TypecheckError::UnexpectedType);
+                                bail!(TypecheckError::UnexpectedType);
                             }
                         }
 
                         if !actual_types.is_empty() {
-                            return Err(TypecheckError::ExtraFields);
+                            bail!(TypecheckError::ExtraFields);
                         }
 
                         env.add(*id, resolved_ty, tcx)
@@ -341,7 +334,7 @@ fn check_command(
                             };
 
                             if !is_subtype(val_ty, resolved_ty, tcx) {
-                                return Err(TypecheckError::UnexpectedType);
+                                bail!(TypecheckError::UnexpectedType);
                             }
                             env.add(*id, resolved_ty, tcx)
                                 .map_err(|_| TypecheckError::AlreadyBound)?;
@@ -377,12 +370,14 @@ fn check_expr_(
     env: &mut TypeEnv,
     ast: &Ast,
     tcx: &mut TypeContext,
-) -> Result<TypeId, TypecheckError> {
+) -> Result<TypeId> {
     match &ast.exprs[expr] {
         Expr::RationalLiteral(v) => Ok(tcx.get_rational(v.clone())),
         Expr::IntLiteral { value, .. } => Ok(tcx.get_static_int(*value)),
         Expr::BoolLiteral(_) => Ok(tcx.get_bool()),
-        Expr::RecordLiteral(..) | Expr::ArrayLiteral(..) => Err(TypecheckError::NotInBinder),
+        Expr::RecordLiteral(..) | Expr::ArrayLiteral(..) => {
+            Err(anyhow!(TypecheckError::NotInBinder))
+        }
         Expr::Cast { expr, ty: cast_ty } => {
             check_expr(*expr, env, ast, tcx)?;
             // TODO: safe cast check
@@ -405,19 +400,19 @@ fn check_expr_(
                 Type::Func {
                     args: arg_types,
                     ret,
-                } => Ok((*arg_types, *ret)),
-                _ => return Err(TypecheckError::UnexpectedType),
-            }?;
+                } => (*arg_types, *ret),
+                _ => bail!(TypecheckError::UnexpectedType),
+            };
 
             if arg_types.len(&tcx.type_lists) != args.len(&ast.expr_lists) {
-                return Err(TypecheckError::ArgLengthMismatch);
+                bail!(TypecheckError::ArgLengthMismatch);
             }
 
             for i in 0..args.len(&ast.expr_lists) {
                 let expected_ty = arg_types.as_slice(&tcx.type_lists)[i];
                 let arg_ty = check_expr(args.as_slice(&ast.expr_lists)[i], env, ast, tcx)?;
                 if !is_subtype(arg_ty, expected_ty, tcx) {
-                    return Err(TypecheckError::UnexpectedType);
+                    bail!(TypecheckError::UnexpectedType);
                 }
             }
 
@@ -428,13 +423,13 @@ fn check_expr_(
 
             let fields = match &tcx.types[record_ty] {
                 Type::RecType { fields, .. } => fields,
-                _ => return Err(TypecheckError::UnexpectedType),
+                _ => bail!(TypecheckError::UnexpectedType),
             };
 
             fields
                 .get(field)
-                .ok_or(TypecheckError::UnknownRecordField)
                 .copied()
+                .ok_or_else(|| anyhow!(TypecheckError::UnknownRecordField))
         }
         Expr::ArrayAccess { array, indices } => {
             let (element_ty, dims_len) =
@@ -442,21 +437,21 @@ fn check_expr_(
                     Type::Array {
                         element_type, dims, ..
                     } => (*element_type, dims.len()),
-                    _ => return Err(TypecheckError::UnexpectedType),
+                    _ => bail!(TypecheckError::UnexpectedType),
                 };
 
             if indices.len(&ast.expr_lists) != dims_len {
-                return Err(TypecheckError::IncorrectAccessDims);
+                bail!(TypecheckError::IncorrectAccessDims);
             }
 
             indices
                 .as_slice(&ast.expr_lists)
                 .iter()
-                .try_for_each(|idx| {
+                .try_for_each(|idx| -> Result<()> {
                     let idx_ty = check_expr(*idx, env, ast, tcx)?;
                     match &tcx.types[idx_ty] {
                         Type::StaticInt(..) | Type::Bit { .. } | Type::Index { .. } => Ok(()),
-                        _ => Err(TypecheckError::UnexpectedType),
+                        _ => Err(anyhow!(TypecheckError::UnexpectedType)),
                     }
                 })?;
 
@@ -466,12 +461,7 @@ fn check_expr_(
     }
 }
 
-fn check_expr(
-    expr: ExprId,
-    env: &mut TypeEnv,
-    ast: &Ast,
-    tcx: &mut TypeContext,
-) -> Result<TypeId, TypecheckError> {
+fn check_expr(expr: ExprId, env: &mut TypeEnv, ast: &Ast, tcx: &mut TypeContext) -> Result<TypeId> {
     let ty = check_expr_(expr, env, ast, tcx)?;
     if let Some(prev_ty) = tcx.expr_type_map.get(expr) {
         assert!(*prev_ty == ty, "Expression type changed during checking");
@@ -486,6 +476,6 @@ fn check_binop(
     op: InfixOp,
     ast: &Ast,
     tcx: &mut TypeContext,
-) -> Result<TypeId, TypecheckError> {
+) -> Result<TypeId> {
     todo!()
 }
