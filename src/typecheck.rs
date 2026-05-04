@@ -5,7 +5,8 @@ use std::{
 
 use crate::{
     ast::{
-        Ast, Command, CommandId, Def, Expr, ExprId, FuncSig, Program, Type, TypeContext, TypeId,
+        Ast, Command, CommandId, Def, Expr, ExprId, FuncSig, InfixOp, Program, Type, TypeContext,
+        TypeId,
     },
     subtyping::{bits_needed, is_subtype},
     type_env::TypeEnv,
@@ -31,6 +32,8 @@ pub enum TypecheckError {
     LiteralLengthMismatch,
     UnknownAlias,
     InvalidArrayDims,
+    Unbound,
+    UnknownRecordField,
 }
 
 impl Display for TypecheckError {
@@ -58,6 +61,8 @@ impl Display for TypecheckError {
             TypecheckError::LiteralLengthMismatch => write!(f, "Array literal length mismatch"),
             TypecheckError::UnknownAlias => write!(f, "Unknown type alias"),
             TypecheckError::InvalidArrayDims => write!(f, "Invalid array dimensions"),
+            TypecheckError::Unbound => write!(f, "Unbound variable"),
+            TypecheckError::UnknownRecordField => write!(f, "Unknown record field"),
         }
     }
 }
@@ -367,13 +372,120 @@ fn check_command(
     }
 }
 
-fn check_expr(
+fn check_expr_(
     expr: ExprId,
     env: &mut TypeEnv,
     ast: &Ast,
     tcx: &mut TypeContext,
 ) -> Result<TypeId, TypecheckError> {
     match &ast.exprs[expr] {
-        _ => todo!(),
+        Expr::RationalLiteral(v) => Ok(tcx.get_rational(v.clone())),
+        Expr::IntLiteral { value, .. } => Ok(tcx.get_static_int(*value)),
+        Expr::BoolLiteral(_) => Ok(tcx.get_bool()),
+        Expr::RecordLiteral(..) | Expr::ArrayLiteral(..) => Err(TypecheckError::NotInBinder),
+        Expr::Cast { expr, ty: cast_ty } => {
+            check_expr(*expr, env, ast, tcx)?;
+            // TODO: safe cast check
+            Ok(*cast_ty)
+        }
+        Expr::Id(id) => {
+            let ty = env.get(id).ok_or(TypecheckError::Unbound)?;
+            tcx.id_type_map.insert(*id, ty);
+            Ok(ty)
+        }
+        Expr::BinOp { left, op, right } => {
+            let t1 = check_expr(*left, env, ast, tcx)?;
+            let t2 = check_expr(*right, env, ast, tcx)?;
+            Ok(check_binop(t1, t2, op.clone(), ast, tcx)?)
+        }
+        Expr::Application { func, args } => {
+            let func_ty = env.get(func).ok_or(TypecheckError::Unbound)?;
+
+            let (arg_types, ret) = match &tcx.types[func_ty] {
+                Type::Func {
+                    args: arg_types,
+                    ret,
+                } => Ok((*arg_types, *ret)),
+                _ => return Err(TypecheckError::UnexpectedType),
+            }?;
+
+            if arg_types.len(&tcx.type_lists) != args.len(&ast.expr_lists) {
+                return Err(TypecheckError::ArgLengthMismatch);
+            }
+
+            for i in 0..args.len(&ast.expr_lists) {
+                let expected_ty = arg_types.as_slice(&tcx.type_lists)[i];
+                let arg_ty = check_expr(args.as_slice(&ast.expr_lists)[i], env, ast, tcx)?;
+                if !is_subtype(arg_ty, expected_ty, tcx) {
+                    return Err(TypecheckError::UnexpectedType);
+                }
+            }
+
+            Ok(ret)
+        }
+        Expr::RecordAccess { record, field } => {
+            let record_ty = check_expr(*record, env, ast, tcx)?;
+
+            let fields = match &tcx.types[record_ty] {
+                Type::RecType { fields, .. } => fields,
+                _ => return Err(TypecheckError::UnexpectedType),
+            };
+
+            fields
+                .get(field)
+                .ok_or(TypecheckError::UnknownRecordField)
+                .copied()
+        }
+        Expr::ArrayAccess { array, indices } => {
+            let (element_ty, dims_len) =
+                match &tcx.types[env.get(array).ok_or(TypecheckError::Unbound)?] {
+                    Type::Array {
+                        element_type, dims, ..
+                    } => (*element_type, dims.len()),
+                    _ => return Err(TypecheckError::UnexpectedType),
+                };
+
+            if indices.len(&ast.expr_lists) != dims_len {
+                return Err(TypecheckError::IncorrectAccessDims);
+            }
+
+            indices
+                .as_slice(&ast.expr_lists)
+                .iter()
+                .try_for_each(|idx| {
+                    let idx_ty = check_expr(*idx, env, ast, tcx)?;
+                    match &tcx.types[idx_ty] {
+                        Type::StaticInt(..) | Type::Bit { .. } | Type::Index { .. } => Ok(()),
+                        _ => Err(TypecheckError::UnexpectedType),
+                    }
+                })?;
+
+            tcx.id_type_map.insert(*array, element_ty);
+            Ok(element_ty)
+        }
     }
+}
+
+fn check_expr(
+    expr: ExprId,
+    env: &mut TypeEnv,
+    ast: &Ast,
+    tcx: &mut TypeContext,
+) -> Result<TypeId, TypecheckError> {
+    let ty = check_expr_(expr, env, ast, tcx)?;
+    if let Some(prev_ty) = tcx.expr_type_map.get(expr) {
+        assert!(*prev_ty == ty, "Expression type changed during checking");
+    }
+    tcx.expr_type_map.insert(expr, ty);
+    Ok(ty)
+}
+
+fn check_binop(
+    tid1: TypeId,
+    tid2: TypeId,
+    op: InfixOp,
+    ast: &Ast,
+    tcx: &mut TypeContext,
+) -> Result<TypeId, TypecheckError> {
+    todo!()
 }
