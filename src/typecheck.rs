@@ -1,9 +1,7 @@
-use std::{
-    collections::HashMap,
-    fmt::{Display, Formatter},
-};
+use std::collections::HashMap;
 
 use anyhow::{Result, anyhow, bail};
+use thiserror::Error;
 
 use crate::{
     ast::{
@@ -14,62 +12,49 @@ use crate::{
     type_env::TypeEnv,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum TypecheckError {
+    #[error("Unexpected type")]
     UnexpectedType,
+    #[error("No common supertype found")]
     NoJoin,
+    #[error("Invalid binary operation")]
     BinopError,
+    #[error("Expression should be in let binder")]
     NotInBinder,
+    #[error("Argument length mismatch")]
     ArgLengthMismatch,
+    #[error("Incorrect number of dimensions for array access")]
     IncorrectAccessDims,
+    #[error("Invalid shrink width")]
     InvalidShrinkWidth,
+    #[error("Invalid align factor")]
     InvalidAlignFactor,
+    #[error("Pipeline error")]
     PipelineError,
+    #[error("Missing field in struct literal")]
     MissingField,
+    #[error("Extra fields in struct literal")]
     ExtraFields,
+    #[error("Invalid split factor")]
     InvalidSplitFactor,
+    #[error("Type is already bound")]
     AlreadyBound,
+    #[error("Explicit type annotation is required")]
     ExplicitTypeMissing,
+    #[error("Unsupported feature: {0}")]
     Unsupported(&'static str),
+    #[error("Array literal length mismatch")]
     LiteralLengthMismatch,
+    #[error("Unknown type alias")]
     UnknownAlias,
+    #[error("Invalid array dimensions")]
     InvalidArrayDims,
+    #[error("Unbound variable")]
     Unbound,
+    #[error("Unknown record field")]
     UnknownRecordField,
 }
-
-impl Display for TypecheckError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TypecheckError::UnexpectedType => write!(f, "Unexpected type"),
-            TypecheckError::NoJoin => write!(f, "No common supertype found"),
-            TypecheckError::BinopError => write!(f, "Invalid binary operation"),
-            TypecheckError::NotInBinder => write!(f, "Expression should be in let binder"),
-            TypecheckError::ArgLengthMismatch => write!(f, "Argument length mismatch"),
-            TypecheckError::IncorrectAccessDims => {
-                write!(f, "Incorrect number of dimensions for array access")
-            }
-            TypecheckError::InvalidShrinkWidth => write!(f, "Invalid shrink width"),
-            TypecheckError::InvalidAlignFactor => write!(f, "Invalid align factor"),
-            TypecheckError::PipelineError => write!(f, "Pipeline error"),
-            TypecheckError::MissingField => write!(f, "Missing field in struct literal"),
-            TypecheckError::ExtraFields => write!(f, "Extra fields in struct literal"),
-            TypecheckError::InvalidSplitFactor => write!(f, "Invalid split factor"),
-            TypecheckError::AlreadyBound => write!(f, "Type is already bound"),
-            TypecheckError::ExplicitTypeMissing => {
-                write!(f, "Explicit type annotation is required")
-            }
-            TypecheckError::Unsupported(feature) => write!(f, "Unsupported feature: {}", feature),
-            TypecheckError::LiteralLengthMismatch => write!(f, "Array literal length mismatch"),
-            TypecheckError::UnknownAlias => write!(f, "Unknown type alias"),
-            TypecheckError::InvalidArrayDims => write!(f, "Invalid array dimensions"),
-            TypecheckError::Unbound => write!(f, "Unbound variable"),
-            TypecheckError::UnknownRecordField => write!(f, "Unknown record field"),
-        }
-    }
-}
-
-impl std::error::Error for TypecheckError {}
 
 pub fn typecheck(program: &Program, ast: &mut Ast, tcx: &mut TypeContext) -> Result<()> {
     let mut env = TypeEnv::new();

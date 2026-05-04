@@ -1,4 +1,6 @@
-use std::{collections::HashMap, error::Error, fmt::Display};
+use std::collections::HashMap;
+
+use thiserror::Error;
 
 use crate::{
     ast::{Id, Type, TypeContext, TypeId},
@@ -11,24 +13,15 @@ pub struct TypeEnv {
     ret_type: Option<TypeId>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum TypeEnvError {
+    #[error("Type is unbound")]
     Unbound,
+    #[error("Type is already bound")]
     AlreadyBound,
+    #[error("Unknown alias")]
     UnknownAlias,
 }
-
-impl Display for TypeEnvError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TypeEnvError::Unbound => write!(f, "Type is unbound"),
-            TypeEnvError::AlreadyBound => write!(f, "Type is already bound"),
-            TypeEnvError::UnknownAlias => write!(f, "Unknown alias"),
-        }
-    }
-}
-
-impl Error for TypeEnvError {}
 
 impl TypeEnv {
     pub fn new() -> Self {

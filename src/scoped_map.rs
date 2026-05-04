@@ -1,27 +1,18 @@
-use std::{collections::HashMap, error::Error, fmt::Display, hash::Hash};
+use std::{collections::HashMap, hash::Hash};
+
+use thiserror::Error;
 
 pub struct ScopedMap<K, V> {
     scopes: Vec<HashMap<K, V>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ScopedMapError {
+    #[error("Key already exists in the current scope")]
     KeyAlreadyExists,
+    #[error("Key not found in any scope")]
     KeyNotFound,
 }
-
-impl Display for ScopedMapError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ScopedMapError::KeyAlreadyExists => {
-                write!(f, "Key already exists in the current scope")
-            }
-            ScopedMapError::KeyNotFound => write!(f, "Key not found in any scope"),
-        }
-    }
-}
-
-impl Error for ScopedMapError {}
 
 impl<K: Eq + Hash, V> ScopedMap<K, V> {
     pub fn new() -> Self {
