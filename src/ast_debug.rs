@@ -1,503 +1,466 @@
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 
+use serde::{Serialize, Serializer};
+use serde_json::{Map, Value, json};
+
 use crate::ast::{
-    AssignOp, Backend, Command, CommandId, Context, Decl, Def, DimSpec, Expr, ExprId, ForRange,
-    FuncSig, Id, Include, InfixOp, Program, Suffix, Type, TypeId, View,
+    AssignOp, Backend, Command, CommandId, Context, Decl, Def, DimSpec, Expr, ExprId, ForRange, Id,
+    Include, InfixOp, Program, Suffix, Type, TypeId, View,
 };
 
-#[derive(Debug)]
-enum DebugType<'a> {
-    Float,
-    Double,
-    Bool,
-    Bit {
-        length: usize,
-        unsigned: bool,
-    },
-    Fixed {
-        length_total: usize,
-        length_int: usize,
-        unsigned: bool,
-    },
-    Alias(&'a str),
-    Array {
-        element_type: Box<DebugType<'a>>,
-        dims: &'a [DimSpec],
-        ports: usize,
-    },
-    StaticInt(i64),
-    Index {
-        static_: (i64, i64),
-        dynamic: (i64, i64),
-    },
-    Void,
-    Rational(&'a str),
-    Func {
-        args: Vec<DebugType<'a>>,
-        ret: Box<DebugType<'a>>,
-    },
-    RecType {
-        name: &'a str,
-        fields: Vec<(&'a str, DebugType<'a>)>,
-    },
+pub struct DebugAst<'a> {
+    context: &'a Context,
+    program: &'a Program,
 }
 
-#[derive(Debug)]
-enum DebugExpr<'a> {
-    Cast {
-        expr: Box<DebugExpr<'a>>,
-        ty: DebugType<'a>,
-    },
-
-    ArrayLiteral(Vec<DebugExpr<'a>>),
-    RecordLiteral(Vec<(&'a str, DebugExpr<'a>)>),
-
-    RationalLiteral(&'a str),
-    IntLiteral {
-        value: i64,
-        base: u8,
-    },
-    BoolLiteral(bool),
-
-    ArrayAccess {
-        array: &'a str,
-        indices: Vec<DebugExpr<'a>>,
-    },
-    RecordAccess {
-        record: Box<DebugExpr<'a>>,
-        field: &'a str,
-    },
-
-    Application {
-        func: &'a str,
-        args: Vec<DebugExpr<'a>>,
-    },
-
-    Id(&'a str),
-
-    BinOp {
-        left: Box<DebugExpr<'a>>,
-        op: &'a InfixOp,
-        right: Box<DebugExpr<'a>>,
-    },
+impl Serialize for DebugAst<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        debug_program(self.context, self.program).serialize(serializer)
+    }
 }
 
-#[derive(Debug)]
-struct DebugForRange<'a> {
-    id: &'a str,
-    ty: Option<DebugType<'a>>,
-    rev: bool,
-    start: i64,
-    end: i64,
-    unroll: i64,
+pub fn debug_ast<'a>(context: &'a Context, program: &'a Program) -> DebugAst<'a> {
+    DebugAst { context, program }
 }
 
-#[derive(Debug)]
-enum DebugCommand<'a> {
-    Empty,
-    Par(Vec<DebugCommand<'a>>),
-    Seq(Vec<DebugCommand<'a>>),
-    Let {
-        id: &'a str,
-        ty: Option<DebugType<'a>>,
-        value: Option<DebugExpr<'a>>,
-    },
-    Update {
-        lhs: DebugExpr<'a>,
-        op: &'a AssignOp,
-        rhs: DebugExpr<'a>,
-    },
-    View {
-        id: &'a str,
-        arr_id: &'a str,
-        dims: Vec<DebugView<'a>>,
-    },
-    Split {
-        id: &'a str,
-        arr_id: &'a str,
-        dims: &'a [usize],
-    },
-    Return(DebugExpr<'a>),
-    IfElse {
-        cond: DebugExpr<'a>,
-        then: Box<DebugCommand<'a>>,
-        else_: Box<DebugCommand<'a>>,
-    },
-    While {
-        cond: DebugExpr<'a>,
-        pipeline: bool,
-        body: Box<DebugCommand<'a>>,
-    },
-    For {
-        range: DebugForRange<'a>,
-        pipeline: bool,
-        body: Box<DebugCommand<'a>>,
-        combine: Box<DebugCommand<'a>>,
-    },
-    Decorate(&'a str),
-    Expr(DebugExpr<'a>),
-}
-
-#[derive(Debug)]
-struct DebugDecl<'a> {
-    id: &'a str,
-    ty: DebugType<'a>,
-}
-
-#[derive(Debug)]
-struct DebugFuncSig<'a> {
-    name: &'a str,
-    args: Vec<DebugDecl<'a>>,
-    ret_ty: DebugType<'a>,
-}
-
-#[derive(Debug)]
-enum DebugDef<'a> {
-    Func {
-        sig: DebugFuncSig<'a>,
-        body: DebugCommand<'a>,
-    },
-    Record {
-        name: &'a str,
-        fields: HashMap<&'a str, DebugType<'a>>,
-    },
-}
-
-#[derive(Debug)]
-enum DebugSuffix<'a> {
-    Rotation(DebugExpr<'a>),
-    Aligned { factor: usize, e: DebugExpr<'a> },
-}
-
-#[derive(Debug)]
-struct DebugView<'a> {
-    suffix: DebugSuffix<'a>,
-    prefix: Option<usize>,
-    shrink: Option<usize>,
-}
-
-#[derive(Debug)]
-struct DebugInclude<'a> {
-    backends: Vec<(&'a Backend, &'a str)>,
-    defs: Vec<DebugDef<'a>>,
-}
-
-#[derive(Debug)]
-struct DebugProgram<'a> {
-    includes: Vec<DebugInclude<'a>>,
-    defs: Vec<DebugDef<'a>>,
-    decors: Vec<DebugCommand<'a>>,
-    decls: Vec<DebugDecl<'a>>,
-    cmd: DebugCommand<'a>,
+pub fn ast_debug_json(context: &Context, program: &Program) -> String {
+    serde_json::to_string_pretty(&debug_ast(context, program)).expect("Debug AST should serialize")
 }
 
 pub fn ast_debug(context: &Context, program: &Program) {
-    println!("{:#?}", debug_program(context, program));
+    println!("{}", ast_debug_json(context, program));
 }
 
 fn resolve(context: &Context, id: Id) -> &str {
     context.ast.ids[id].as_str()
 }
 
-fn debug_program<'a>(context: &'a Context, program: &'a Program) -> DebugProgram<'a> {
-    DebugProgram {
-        includes: program
-            .includes
-            .iter()
-            .map(|include| debug_include(context, include))
-            .collect(),
-        defs: program
-            .defs
-            .iter()
-            .map(|def| debug_def(context, def))
-            .collect(),
-        decors: debug_command_list(context, program.decors.as_slice(&context.ast.command_lists)),
-        decls: program
-            .decls
-            .iter()
-            .map(|decl| debug_decl(context, decl))
-            .collect(),
-        cmd: debug_command_id(context, program.cmd),
-    }
+fn type_annotation(context: &Context, ty: Option<TypeId>) -> Value {
+    ty.map(|ty| debug_type_id(context, ty))
+        .unwrap_or(Value::Null)
 }
 
-fn debug_include<'a>(context: &'a Context, include: &'a Include) -> DebugInclude<'a> {
-    DebugInclude {
-        backends: include
+fn debug_id(context: &Context, id: Id) -> Value {
+    json!({
+        "kind": "Id",
+        "v": resolve(context, id),
+        "typ": type_annotation(context, context.tcx.id_type_map.get(id).copied()),
+    })
+}
+
+fn debug_program(context: &Context, program: &Program) -> Value {
+    json!({
+        "kind": "Prog",
+        "includes": program.includes.iter().map(|include| debug_include(context, include)).collect::<Vec<_>>(),
+        "defs": program.defs.iter().map(|def| debug_def(context, def, true)).collect::<Vec<_>>(),
+        "decors": debug_command_list(context, program.decors.as_slice(&context.ast.command_lists)),
+        "decls": program.decls.iter().map(|decl| debug_decl(context, decl)).collect::<Vec<_>>(),
+        "cmd": debug_command_id(context, program.cmd),
+    })
+}
+
+fn debug_include(context: &Context, include: &Include) -> Value {
+    let backends = Map::from_iter(
+        include
             .backends
             .iter()
-            .map(|(backend, value)| (backend, value.as_str()))
-            .collect(),
-        defs: include
-            .defs
-            .iter()
-            .map(|def| debug_def(context, def))
-            .collect(),
-    }
+            .map(|(backend, value)| (backend_name(backend).to_string(), json!(value))),
+    );
+
+    json!({
+        "kind": "Include",
+        "backends": Value::Object(backends),
+        "defs": include.defs.iter().map(|def| debug_def(context, def, false)).collect::<Vec<_>>(),
+    })
 }
 
-fn debug_def<'a>(context: &'a Context, def: &'a Def) -> DebugDef<'a> {
+fn debug_def(context: &Context, def: &Def, include_body: bool) -> Value {
     match def {
-        Def::Func { sig, body } => DebugDef::Func {
-            sig: debug_func_sig(context, sig),
-            body: debug_command_id(context, *body),
-        },
-        Def::Record { name, fields } => DebugDef::Record {
-            name: resolve(context, *name),
-            fields: debug_field_map(context, fields),
-        },
+        Def::Func { sig, body } => json!({
+            "kind": "FuncDef",
+            "id": debug_id(context, sig.name),
+            "args": debug_decl_list(context, &sig.args),
+            "retTy": debug_type_id(context, sig.ret_ty),
+            "body": if include_body { debug_command_id(context, *body) } else { Value::Null },
+        }),
+        Def::Record { name, fields } => json!({
+            "kind": "RecordDef",
+            "name": debug_id(context, *name),
+            "fields": debug_field_entries(context, fields),
+        }),
     }
 }
 
-fn debug_func_sig<'a>(context: &'a Context, sig: &'a FuncSig) -> DebugFuncSig<'a> {
-    DebugFuncSig {
-        name: resolve(context, sig.name),
-        args: debug_decl_list(context, &sig.args),
-        ret_ty: debug_type_id(context, sig.ret_ty),
-    }
-}
-
-fn debug_decl_list<'a>(context: &'a Context, decls: &'a [Decl]) -> Vec<DebugDecl<'a>> {
+fn debug_decl_list(context: &Context, decls: &[Decl]) -> Vec<Value> {
     decls.iter().map(|decl| debug_decl(context, decl)).collect()
 }
 
-fn debug_decl<'a>(context: &'a Context, decl: &'a Decl) -> DebugDecl<'a> {
-    DebugDecl {
-        id: resolve(context, decl.id),
-        ty: debug_type_id(context, decl.ty),
-    }
+fn debug_decl(context: &Context, decl: &Decl) -> Value {
+    json!({
+        "kind": "Decl",
+        "id": debug_id(context, decl.id),
+        "typ": debug_type_id(context, decl.ty),
+    })
 }
 
-fn debug_field_map<'a>(
-    context: &'a Context,
-    fields: &'a HashMap<Id, TypeId>,
-) -> HashMap<&'a str, DebugType<'a>> {
-    fields
-        .iter()
-        .map(|(id, ty)| (resolve(context, *id), debug_type_id(context, *ty)))
+fn debug_field_entries(context: &Context, fields: &HashMap<Id, TypeId>) -> Vec<Value> {
+    sorted_entries(context, fields)
+        .into_iter()
+        .map(|(id, ty)| json!({ "name": debug_id(context, id), "value": debug_type_id(context, *ty) }))
         .collect()
 }
 
-fn debug_view<'a>(context: &'a Context, view: &'a View) -> DebugView<'a> {
-    DebugView {
-        suffix: debug_suffix(context, &view.suffix),
-        prefix: view.prefix,
-        shrink: view.shrink,
-    }
+fn debug_expr_field_entries(context: &Context, fields: &HashMap<Id, ExprId>) -> Vec<Value> {
+    sorted_entries(context, fields)
+        .into_iter()
+        .map(|(id, expr)| json!({ "name": debug_id(context, id), "value": debug_expr_id(context, *expr) }))
+        .collect()
 }
 
-fn debug_suffix<'a>(context: &'a Context, suffix: &'a Suffix) -> DebugSuffix<'a> {
+fn debug_view(context: &Context, view: &View) -> Value {
+    json!({
+        "kind": "View",
+        "suffix": debug_suffix(context, &view.suffix),
+        "prefix": view.prefix,
+        "shrink": view.shrink,
+    })
+}
+
+fn debug_suffix(context: &Context, suffix: &Suffix) -> Value {
     match suffix {
-        Suffix::Rotation(expr) => DebugSuffix::Rotation(debug_expr_id(context, *expr)),
-        Suffix::Aligned { factor, e } => DebugSuffix::Aligned {
-            factor: *factor,
-            e: debug_expr_id(context, *e),
-        },
+        Suffix::Rotation(expr) => json!({
+            "kind": "Rotation",
+            "e": debug_expr_id(context, *expr),
+        }),
+        Suffix::Aligned { factor, e } => json!({
+            "kind": "Aligned",
+            "factor": factor,
+            "e": debug_expr_id(context, *e),
+        }),
     }
 }
 
-fn debug_for_range<'a>(context: &'a Context, range: &'a ForRange) -> DebugForRange<'a> {
-    DebugForRange {
-        id: resolve(context, range.id),
-        ty: range.ty.map(|ty| debug_type_id(context, ty)),
-        rev: range.rev,
-        start: range.start,
-        end: range.end,
-        unroll: range.unroll,
-    }
+fn debug_for_range(context: &Context, range: &ForRange) -> Value {
+    json!({
+        "kind": "CRange",
+        "iter": debug_id(context, range.id),
+        "castType": type_annotation(context, range.ty),
+        "reversed": range.rev,
+        "s": range.start,
+        "e": range.end,
+        "u": range.unroll,
+    })
 }
 
-fn debug_command_id<'a>(context: &'a Context, command: CommandId) -> DebugCommand<'a> {
+fn debug_command_id(context: &Context, command: CommandId) -> Value {
     debug_command(context, &context.ast.commands[command])
 }
 
-fn debug_command_list<'a>(context: &'a Context, commands: &[CommandId]) -> Vec<DebugCommand<'a>> {
+fn debug_command_list(context: &Context, commands: &[CommandId]) -> Vec<Value> {
     commands
         .iter()
         .map(|command| debug_command_id(context, *command))
         .collect()
 }
 
-fn debug_command<'a>(context: &'a Context, command: &'a Command) -> DebugCommand<'a> {
+fn debug_command(context: &Context, command: &Command) -> Value {
     match command {
-        Command::Empty => DebugCommand::Empty,
-        Command::Par(commands) => DebugCommand::Par(debug_command_list(context, commands)),
-        Command::Seq(commands) => DebugCommand::Seq(debug_command_list(context, commands)),
-        Command::Let { id, ty, value } => DebugCommand::Let {
-            id: resolve(context, *id),
-            ty: ty.map(|ty| debug_type_id(context, ty)),
-            value: value.map(|expr| debug_expr_id(context, expr)),
+        Command::Empty => json!({
+            "kind": "CEmpty",
+        }),
+        Command::Par(commands) => json!({
+            "kind": "CPar",
+            "cmds": debug_command_list(context, commands),
+        }),
+        Command::Seq(commands) => json!({
+            "kind": "CSeq",
+            "cmds": debug_command_list(context, commands),
+        }),
+        Command::Let { id, ty, value } => json!({
+            "kind": "CLet",
+            "id": debug_id(context, *id),
+            "typ": type_annotation(context, *ty),
+            "e": value.map(|expr| debug_expr_id(context, expr)).unwrap_or(Value::Null),
+        }),
+        Command::Update { lhs, op, rhs } => match op {
+            AssignOp::Assign => json!({
+                "kind": "CUpdate",
+                "lhs": debug_expr_id(context, *lhs),
+                "rhs": debug_expr_id(context, *rhs),
+            }),
+            AssignOp::AddAssign
+            | AssignOp::SubAssign
+            | AssignOp::MulAssign
+            | AssignOp::DivAssign => json!({
+                "kind": "CReduce",
+                "rop": debug_rop(op),
+                "lhs": debug_expr_id(context, *lhs),
+                "rhs": debug_expr_id(context, *rhs),
+            }),
         },
-        Command::Update { lhs, op, rhs } => DebugCommand::Update {
-            lhs: debug_expr_id(context, *lhs),
-            op,
-            rhs: debug_expr_id(context, *rhs),
-        },
-        Command::View { id, arr_id, dims } => DebugCommand::View {
-            id: resolve(context, *id),
-            arr_id: resolve(context, *arr_id),
-            dims: dims.iter().map(|view| debug_view(context, view)).collect(),
-        },
-        Command::Split { id, arr_id, dims } => DebugCommand::Split {
-            id: resolve(context, *id),
-            arr_id: resolve(context, *arr_id),
-            dims,
-        },
-        Command::Return(expr) => DebugCommand::Return(debug_expr_id(context, *expr)),
-        Command::IfElse { cond, then, else_ } => DebugCommand::IfElse {
-            cond: debug_expr_id(context, *cond),
-            then: Box::new(debug_command_id(context, *then)),
-            else_: Box::new(debug_command_id(context, *else_)),
-        },
+        Command::View { id, arr_id, dims } => json!({
+            "kind": "CView",
+            "id": debug_id(context, *id),
+            "arrId": debug_id(context, *arr_id),
+            "dims": dims.iter().map(|view| debug_view(context, view)).collect::<Vec<_>>(),
+        }),
+        Command::Split { id, arr_id, dims } => json!({
+            "kind": "CSplit",
+            "id": debug_id(context, *id),
+            "arrId": debug_id(context, *arr_id),
+            "factors": dims,
+        }),
+        Command::Return(expr) => json!({
+            "kind": "CReturn",
+            "exp": debug_expr_id(context, *expr),
+        }),
+        Command::IfElse { cond, then, else_ } => json!({
+            "kind": "CIf",
+            "cond": debug_expr_id(context, *cond),
+            "cons": debug_command_id(context, *then),
+            "alt": debug_command_id(context, *else_),
+        }),
         Command::While {
             cond,
             pipeline,
             body,
-        } => DebugCommand::While {
-            cond: debug_expr_id(context, *cond),
-            pipeline: *pipeline,
-            body: Box::new(debug_command_id(context, *body)),
-        },
+        } => json!({
+            "kind": "CWhile",
+            "cond": debug_expr_id(context, *cond),
+            "pipeline": pipeline,
+            "body": debug_command_id(context, *body),
+        }),
         Command::For {
             range,
             pipeline,
             body,
             combine,
-        } => DebugCommand::For {
-            range: debug_for_range(context, range),
-            pipeline: *pipeline,
-            body: Box::new(debug_command_id(context, *body)),
-            combine: Box::new(debug_command_id(context, *combine)),
-        },
-        Command::Decorate(value) => DebugCommand::Decorate(value),
-        Command::Expr(expr) => DebugCommand::Expr(debug_expr_id(context, *expr)),
+        } => json!({
+            "kind": "CFor",
+            "range": debug_for_range(context, range),
+            "pipeline": pipeline,
+            "par": debug_command_id(context, *body),
+            "combine": debug_command_id(context, *combine),
+        }),
+        Command::Decorate(value) => json!({
+            "kind": "CDecorate",
+            "value": value,
+        }),
+        Command::Expr(expr) => json!({
+            "kind": "CExpr",
+            "exp": debug_expr_id(context, *expr),
+        }),
     }
 }
 
-fn debug_expr_id<'a>(context: &'a Context, expr: ExprId) -> DebugExpr<'a> {
-    debug_expr(context, &context.ast.exprs[expr])
+fn debug_expr_id(context: &Context, expr: ExprId) -> Value {
+    let mut value = debug_expr(context, expr, &context.ast.exprs[expr]);
+    value["typ"] = type_annotation(context, context.tcx.expr_type_map.get(expr).copied());
+    value
 }
 
-fn debug_expr_list<'a>(context: &'a Context, exprs: &[ExprId]) -> Vec<DebugExpr<'a>> {
+fn debug_expr_list(context: &Context, exprs: &[ExprId]) -> Vec<Value> {
     exprs
         .iter()
         .map(|expr| debug_expr_id(context, *expr))
         .collect()
 }
 
-fn debug_expr<'a>(context: &'a Context, expr: &'a Expr) -> DebugExpr<'a> {
+fn debug_expr(context: &Context, _expr_id: ExprId, expr: &Expr) -> Value {
     match expr {
-        Expr::Cast { expr, ty } => DebugExpr::Cast {
-            expr: Box::new(debug_expr_id(context, *expr)),
-            ty: debug_type_id(context, *ty),
-        },
-        Expr::ArrayLiteral(elements) => DebugExpr::ArrayLiteral(debug_expr_list(
-            context,
-            elements.as_slice(&context.ast.expr_lists),
-        )),
-        Expr::RecordLiteral(fields) => DebugExpr::RecordLiteral(
-            sorted_entries(context, fields)
-                .into_iter()
-                .map(|(id, expr)| (id, debug_expr_id(context, *expr)))
-                .collect(),
-        ),
-        Expr::RationalLiteral(value) => DebugExpr::RationalLiteral(value),
-        Expr::IntLiteral { value, base } => DebugExpr::IntLiteral {
-            value: *value,
-            base: *base,
-        },
-        Expr::BoolLiteral(value) => DebugExpr::BoolLiteral(*value),
-        Expr::ArrayAccess { array, indices } => DebugExpr::ArrayAccess {
-            array: resolve(context, *array),
-            indices: debug_expr_list(context, indices.as_slice(&context.ast.expr_lists)),
-        },
-        Expr::RecordAccess { record, field } => DebugExpr::RecordAccess {
-            record: Box::new(debug_expr_id(context, *record)),
-            field: resolve(context, *field),
-        },
-        Expr::Application { func, args } => DebugExpr::Application {
-            func: resolve(context, *func),
-            args: debug_expr_list(context, args.as_slice(&context.ast.expr_lists)),
-        },
-        Expr::Id(id) => DebugExpr::Id(resolve(context, *id)),
-        Expr::BinOp { left, op, right } => DebugExpr::BinOp {
-            left: Box::new(debug_expr_id(context, *left)),
-            op,
-            right: Box::new(debug_expr_id(context, *right)),
-        },
+        Expr::Cast { expr, ty } => json!({
+            "kind": "ECast",
+            "e": debug_expr_id(context, *expr),
+            "castType": debug_type_id(context, *ty),
+        }),
+        Expr::ArrayLiteral(elements) => json!({
+            "kind": "EArrLiteral",
+            "idxs": debug_expr_list(context, elements.as_slice(&context.ast.expr_lists)),
+        }),
+        Expr::RecordLiteral(fields) => json!({
+            "kind": "ERecLiteral",
+            "fields": debug_expr_field_entries(context, fields),
+        }),
+        Expr::RationalLiteral(value) => json!({
+            "kind": "ERational",
+            "d": value,
+        }),
+        Expr::IntLiteral { value, base } => json!({
+            "kind": "EInt",
+            "v": value.to_string(),
+            "base": base,
+        }),
+        Expr::BoolLiteral(value) => json!({
+            "kind": "EBool",
+            "v": value,
+        }),
+        Expr::ArrayAccess { array, indices } => json!({
+            "kind": "EArrAccess",
+            "id": debug_id(context, *array),
+            "idxs": debug_expr_list(context, indices.as_slice(&context.ast.expr_lists)),
+        }),
+        Expr::RecordAccess { record, field } => json!({
+            "kind": "ERecAccess",
+            "rec": debug_expr_id(context, *record),
+            "fieldName": debug_id(context, *field),
+        }),
+        Expr::Application { func, args } => json!({
+            "kind": "EApp",
+            "func": debug_id(context, *func),
+            "args": debug_expr_list(context, args.as_slice(&context.ast.expr_lists)),
+        }),
+        Expr::Id(id) => json!({
+            "kind": "EVar",
+            "id": debug_id(context, *id),
+        }),
+        Expr::BinOp { left, op, right } => json!({
+            "kind": "EBinop",
+            "op": debug_bop(op),
+            "e1": debug_expr_id(context, *left),
+            "e2": debug_expr_id(context, *right),
+        }),
     }
 }
 
-fn debug_type_id<'a>(context: &'a Context, ty: TypeId) -> DebugType<'a> {
+fn debug_type_id(context: &Context, ty: TypeId) -> Value {
     debug_type(context, &context.tcx.types[ty])
 }
 
-fn debug_type_list<'a>(context: &'a Context, types: &[TypeId]) -> Vec<DebugType<'a>> {
+fn debug_type_list(context: &Context, types: &[TypeId]) -> Vec<Value> {
     types.iter().map(|ty| debug_type_id(context, *ty)).collect()
 }
 
-fn debug_type<'a>(context: &'a Context, ty: &'a Type) -> DebugType<'a> {
+fn debug_type(context: &Context, ty: &Type) -> Value {
     match ty {
-        Type::Float => DebugType::Float,
-        Type::Double => DebugType::Double,
-        Type::Bool => DebugType::Bool,
-        Type::Bit { length, unsigned } => DebugType::Bit {
-            length: *length,
-            unsigned: *unsigned,
-        },
+        Type::Float => json!({ "kind": "TFloat" }),
+        Type::Double => json!({ "kind": "TDouble" }),
+        Type::Bool => json!({ "kind": "TBool" }),
+        Type::Bit { length, unsigned } => json!({
+            "kind": "TSizedInt",
+            "len": length,
+            "unsigned": unsigned,
+        }),
         Type::Fixed {
             length_total,
             length_int,
             unsigned,
-        } => DebugType::Fixed {
-            length_total: *length_total,
-            length_int: *length_int,
-            unsigned: *unsigned,
-        },
-        Type::Alias(name) => DebugType::Alias(resolve(context, *name)),
+        } => json!({
+            "kind": "TFixed",
+            "ltotal": length_total,
+            "lint": length_int,
+            "unsigned": unsigned,
+        }),
+        Type::Alias(name) => json!({
+            "kind": "TAlias",
+            "name": debug_id(context, *name),
+        }),
         Type::Array {
             element_type,
             dims,
             ports,
-        } => DebugType::Array {
-            element_type: Box::new(debug_type_id(context, *element_type)),
-            dims,
-            ports: *ports,
-        },
-        Type::StaticInt(value) => DebugType::StaticInt(*value),
-        Type::Index { static_, dynamic } => DebugType::Index {
-            static_: *static_,
-            dynamic: *dynamic,
-        },
-        Type::Void => DebugType::Void,
-        Type::Rational(value) => DebugType::Rational(value),
-        Type::Func { args, ret } => DebugType::Func {
-            args: debug_type_list(context, args.as_slice(&context.tcx.type_lists)),
-            ret: Box::new(debug_type_id(context, *ret)),
-        },
-        Type::RecType { name, fields } => DebugType::RecType {
-            name: resolve(context, *name),
-            fields: sorted_entries(context, fields)
-                .into_iter()
-                .map(|(id, ty)| (id, debug_type_id(context, *ty)))
-                .collect(),
-        },
+        } => json!({
+            "kind": "TArray",
+            "typ": debug_type_id(context, *element_type),
+            "dims": dims.iter().map(debug_dim_spec).collect::<Vec<_>>(),
+            "ports": ports,
+        }),
+        Type::StaticInt(value) => json!({
+            "kind": "TStaticInt",
+            "v": value.to_string(),
+        }),
+        Type::Index { static_, dynamic } => json!({
+            "kind": "TIndex",
+            "static": { "lo": static_.0, "hi": static_.1 },
+            "dynamic": { "lo": dynamic.0, "hi": dynamic.1 },
+        }),
+        Type::Void => json!({ "kind": "TVoid" }),
+        Type::Rational(value) => json!({
+            "kind": "TRational",
+            "value": value,
+        }),
+        Type::Func { args, ret } => json!({
+            "kind": "TFun",
+            "args": debug_type_list(context, args.as_slice(&context.tcx.type_lists)),
+            "ret": debug_type_id(context, *ret),
+        }),
+        Type::RecType { name, fields } => json!({
+            "kind": "TRecType",
+            "name": debug_id(context, *name),
+            "fields": debug_field_entries(context, fields),
+        }),
     }
 }
 
-fn sorted_entries<'a, V>(
-    context: &'a Context,
-    fields: &'a HashMap<Id, V>,
-) -> Vec<(&'a str, &'a V)>
+fn debug_dim_spec(dim: &DimSpec) -> Value {
+    json!({
+        "len": dim.length,
+        "bank": dim.bank.unwrap_or(1),
+    })
+}
+
+fn debug_bop(op: &InfixOp) -> Value {
+    let (kind, op) = match op {
+        InfixOp::Mul => ("NumOp", "*"),
+        InfixOp::Div => ("NumOp", "/"),
+        InfixOp::Mod => ("NumOp", "%"),
+        InfixOp::Add => ("NumOp", "+"),
+        InfixOp::Sub => ("NumOp", "-"),
+        InfixOp::Shl => ("BitOp", "<<"),
+        InfixOp::Shr => ("BitOp", ">>"),
+        InfixOp::Eq => ("EqOp", "=="),
+        InfixOp::Neq => ("EqOp", "!="),
+        InfixOp::Le => ("CmpOp", "<="),
+        InfixOp::Ge => ("CmpOp", ">="),
+        InfixOp::Lt => ("CmpOp", "<"),
+        InfixOp::Gt => ("CmpOp", ">"),
+        InfixOp::And => ("BoolOp", "&&"),
+        InfixOp::Or => ("BoolOp", "||"),
+        InfixOp::Band => ("BitOp", "&"),
+        InfixOp::Bor => ("BitOp", "|"),
+        InfixOp::Bxor => ("BitOp", "^"),
+    };
+
+    json!({
+        "kind": kind,
+        "op": op,
+    })
+}
+
+fn debug_rop(op: &AssignOp) -> Value {
+    let op = match op {
+        AssignOp::Assign => ":=",
+        AssignOp::AddAssign => "+=",
+        AssignOp::SubAssign => "-=",
+        AssignOp::MulAssign => "*=",
+        AssignOp::DivAssign => "/=",
+    };
+
+    json!({
+        "kind": "ROp",
+        "op": op,
+    })
+}
+
+fn backend_name(backend: &Backend) -> &'static str {
+    match backend {
+        Backend::Cpp => "c++",
+        Backend::Vivado => "vivado",
+        Backend::Futil | Backend::Calyx => "calyx",
+    }
+}
+
+fn sorted_entries<'a, V>(context: &'a Context, fields: &'a HashMap<Id, V>) -> Vec<(Id, &'a V)>
 where
     V: Ord,
 {
-    let mut fields: Vec<_> = fields
-        .iter()
-        .map(|(id, v)| (resolve(context, *id), v))
-        .collect();
-    fields.sort();
+    let mut fields: Vec<_> = fields.iter().map(|(id, v)| (*id, v)).collect();
+    fields.sort_by(|(left, left_v), (right, right_v)| {
+        resolve(context, *left)
+            .cmp(resolve(context, *right))
+            .then_with(|| left_v.cmp(right_v))
+    });
     fields
 }
