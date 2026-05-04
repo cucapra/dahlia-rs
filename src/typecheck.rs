@@ -5,8 +5,8 @@ use thiserror::Error;
 
 use crate::{
     ast::{
-        Ast, Command, CommandId, Def, Expr, ExprId, FuncSig, InfixOp, Program, Type, TypeContext,
-        TypeId,
+        Ast, Command, CommandId, Decl, Def, Expr, ExprId, FuncSig, InfixOp, Program, Type,
+        TypeContext, TypeId,
     },
     subtyping::is_subtype,
     type_env::TypeEnv,
@@ -79,22 +79,37 @@ pub fn typecheck(program: &Program, ast: &mut Ast, tcx: &mut TypeContext) -> Res
         })?;
     }
 
-    // check the main command
-    check_def(
-        &Def::Func {
-            sig: FuncSig {
-                name: ast.ids.push("main".to_string()),
-                args: vec![],
-                ret_ty: tcx.get_void(),
-            },
-            body: program.cmd,
-        },
-        &mut env,
-        ast,
-        tcx,
-    )
-    .context("failed to type check the main command")?;
+    for decl in &program.decls {
+        check_decl(decl, &mut env, ast, tcx).with_context(|| {
+            format!(
+                "failed to type check program declaration `{}`",
+                resolve_id(decl.id, ast)
+            )
+        })?;
+    }
 
+    // check the main command
+    env.set_ret_type(tcx.get_void());
+    check_command(program.cmd, &mut env, ast, tcx)
+        .context("failed to type check the main command")?;
+
+    Ok(())
+}
+
+fn check_decl(decl: &Decl, env: &mut TypeEnv, ast: &Ast, tcx: &mut TypeContext) -> Result<()> {
+    let resolved_ty = env
+        .resolve_type(decl.ty, tcx)
+        .map_err(|_| TypecheckError::UnknownAlias)
+        .with_context(|| {
+            format!(
+                "failed to type check declaration `{}` type",
+                resolve_id(decl.id, ast),
+            )
+        })?;
+    tcx.id_type_map.insert(decl.id, resolved_ty);
+    env.add(decl.id, resolved_ty, tcx)
+        .map_err(|_| TypecheckError::AlreadyBound)
+        .with_context(|| format!("`{}` already bound", resolve_id(decl.id, ast)))?;
     Ok(())
 }
 
@@ -126,26 +141,13 @@ fn check_def(def: &Def, env: &mut TypeEnv, ast: &Ast, tcx: &mut TypeContext) -> 
             env.with_scope(|env| -> Result<()> {
                 // add args to env
                 for decl in &sig.args {
-                    let resolved_ty = env
-                        .resolve_type(decl.ty, tcx)
-                        .map_err(|_| TypecheckError::UnknownAlias)
-                        .with_context(|| {
-                            format!(
-                                "failed to type check function `{}` argument `{}` type",
-                                resolve_id(sig.name, ast),
-                                resolve_id(decl.id, ast),
-                            )
-                        })?;
-                    tcx.id_type_map.insert(decl.id, resolved_ty);
-                    env.add(decl.id, resolved_ty, tcx)
-                        .map_err(|_| TypecheckError::AlreadyBound)
-                        .with_context(|| {
-                            format!(
-                                "argument `{}` for function `{}` already bound",
-                                resolve_id(decl.id, ast),
-                                resolve_id(sig.name, ast)
-                            )
-                        })?;
+                    check_decl(decl, env, ast, tcx).with_context(|| {
+                        format!(
+                            "failed to type check function `{}` argument `{}`",
+                            resolve_id(sig.name, ast),
+                            resolve_id(decl.id, ast),
+                        )
+                    })?;
                 }
 
                 // add return type to env
