@@ -1,24 +1,13 @@
 use std::ops::{Add, Div, Mul, Rem, Sub};
 
-use crate::ast::{InfixOp, Type, TypeContext, TypeId};
-
-pub fn bits_needed(n: i64) -> usize {
-    match n {
-        0 => 1,
-        n if n > 0 => (u64::BITS - (n as u64).leading_zeros()) as usize,
-        _ => (u64::BITS - n.unsigned_abs().leading_zeros()) as usize + 1,
-    }
-}
+use crate::{
+    ast::{InfixOp, Type, TypeContext, TypeId},
+    utils::bits_needed,
+};
 
 pub fn is_subtype(tid1: TypeId, tid2: TypeId, tcx: &TypeContext) -> bool {
-    let t1 = tcx
-        .types
-        .get(tid1)
-        .expect("Type ID not found in context");
-    let t2 = tcx
-        .types
-        .get(tid2)
-        .expect("Type ID not found in context");
+    let t1 = tcx.types.get(tid1).expect("Type ID not found in context");
+    let t2 = tcx.types.get(tid2).expect("Type ID not found in context");
 
     match (t1, t2) {
         (
@@ -101,14 +90,8 @@ fn join_of_helper(
     op: InfixOp,
     tcx: &mut TypeContext,
 ) -> Option<TypeId> {
-    let t1 = tcx
-        .types
-        .get(tid1)
-        .expect("Type ID not found in context");
-    let t2 = tcx
-        .types
-        .get(tid2)
-        .expect("Type ID not found in context");
+    let t1 = tcx.types.get(tid1).expect("Type ID not found in context");
+    let t2 = tcx.types.get(tid2).expect("Type ID not found in context");
 
     match (t1, t2) {
         (Type::StaticInt(v1), Type::StaticInt(v2)) => {
@@ -231,10 +214,7 @@ pub fn safe_cast(tid_from: TypeId, tid_to: TypeId, tcx: &TypeContext) -> bool {
         .types
         .get(tid_from)
         .expect("Type ID not found in context");
-    let tto = tcx
-        .types
-        .get(tid_to)
-        .expect("Type ID not found in context");
+    let tto = tcx.types.get(tid_to).expect("Type ID not found in context");
 
     match (tfrom, tto) {
         (Type::StaticInt(..) | Type::Index { .. } | Type::Bit { .. }, Type::Bit { .. }) => {

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow};
 use thiserror::Error;
 
 use crate::{
@@ -8,8 +8,9 @@ use crate::{
         Ast, Command, CommandId, Def, Expr, ExprId, FuncSig, InfixOp, Program, Type, TypeContext,
         TypeId,
     },
-    subtyping::{bits_needed, is_subtype},
+    subtyping::is_subtype,
     type_env::TypeEnv,
+    utils::{bits_needed, resolve_id},
 };
 
 #[derive(Debug, Error)]
@@ -67,7 +68,15 @@ pub fn typecheck(program: &Program, ast: &mut Ast, tcx: &mut TypeContext) -> Res
         .collect();
 
     for def in all_defs {
-        check_def(def, &mut env, ast, tcx)?;
+        check_def(def, &mut env, ast, tcx).with_context(|| {
+            format!(
+                "failed to type check definition `{}`",
+                match def {
+                    Def::Record { name, .. } => resolve_id(*name, ast),
+                    Def::Func { sig, .. } => resolve_id(sig.name, ast),
+                }
+            )
+        })?;
     }
 
     // check the main command
@@ -83,7 +92,8 @@ pub fn typecheck(program: &Program, ast: &mut Ast, tcx: &mut TypeContext) -> Res
         &mut env,
         ast,
         tcx,
-    )?;
+    )
+    .context("failed to type check the main command")?;
 
     Ok(())
 }
@@ -98,12 +108,19 @@ fn check_def(def: &Def, env: &mut TypeEnv, ast: &Ast, tcx: &mut TypeContext) -> 
                         .map(|resolved| (id.clone(), resolved))
                         .map_err(|_| TypecheckError::UnknownAlias)
                 })
-                .collect::<Result<_, _>>()?;
+                .collect::<Result<_, _>>()
+                .with_context(|| {
+                    format!(
+                        "failed to type check record definition `{}` field types",
+                        resolve_id(*name, ast)
+                    )
+                })?;
             env.add_type(
                 name.clone(),
                 tcx.get_rec_type(name.clone(), resolved_fields),
             )
-            .map_err(|_| TypecheckError::AlreadyBound)?;
+            .map_err(|_| TypecheckError::AlreadyBound)
+            .with_context(|| format!("record type `{}` already bound", resolve_id(*name, ast)))?;
         }
         Def::Func { sig, body } => {
             env.with_scope(|env| -> Result<()> {
@@ -111,19 +128,44 @@ fn check_def(def: &Def, env: &mut TypeEnv, ast: &Ast, tcx: &mut TypeContext) -> 
                 for decl in &sig.args {
                     let resolved_ty = env
                         .resolve_type(decl.ty, tcx)
-                        .map_err(|_| TypecheckError::UnknownAlias)?;
+                        .map_err(|_| TypecheckError::UnknownAlias)
+                        .with_context(|| {
+                            format!(
+                                "failed to type check function `{}` argument `{}` type",
+                                resolve_id(sig.name, ast),
+                                resolve_id(decl.id, ast),
+                            )
+                        })?;
                     tcx.id_type_map.insert(decl.id, resolved_ty);
                     env.add(decl.id, resolved_ty, tcx)
-                        .map_err(|_| TypecheckError::AlreadyBound)?;
+                        .map_err(|_| TypecheckError::AlreadyBound)
+                        .with_context(|| {
+                            format!(
+                                "argument `{}` for function `{}` already bound",
+                                resolve_id(decl.id, ast),
+                                resolve_id(sig.name, ast)
+                            )
+                        })?;
                 }
 
                 // add return type to env
                 let resolved_ret_ty = env
                     .resolve_type(sig.ret_ty, tcx)
-                    .map_err(|_| TypecheckError::UnknownAlias)?;
+                    .map_err(|_| TypecheckError::UnknownAlias)
+                    .with_context(|| {
+                        format!(
+                            "failed to type check function `{}` return type",
+                            resolve_id(sig.name, ast)
+                        )
+                    })?;
                 env.set_ret_type(resolved_ret_ty);
 
-                check_command(*body, env, ast, tcx)?;
+                check_command(*body, env, ast, tcx).with_context(|| {
+                    format!(
+                        "failed to type check command: function `{}` body",
+                        resolve_id(sig.name, ast)
+                    )
+                })?;
                 Ok(())
             })?;
 
@@ -134,7 +176,8 @@ fn check_def(def: &Def, env: &mut TypeEnv, ast: &Ast, tcx: &mut TypeContext) -> 
                 tcx.get_func(sig.args.iter().map(|decl| decl.ty).collect(), sig.ret_ty),
                 tcx,
             )
-            .map_err(|_| TypecheckError::AlreadyBound)?;
+            .map_err(|_| TypecheckError::AlreadyBound)
+            .with_context(|| format!("function `{}` already bound", resolve_id(sig.name, ast)))?;
         }
     }
     Ok(())
@@ -155,20 +198,32 @@ fn check_command(
 ) -> Result<()> {
     match &ast.commands[cmd] {
         Command::Empty => Ok(()),
-        Command::Par(cmds) | Command::Seq(cmds) => {
+        Command::Par(cmds) => {
             for cmd in cmds {
-                check_command(*cmd, env, ast, tcx)?;
+                check_command(*cmd, env, ast, tcx)
+                    .context("failed to type check command: par block")?;
+            }
+            Ok(())
+        }
+        Command::Seq(cmds) => {
+            for cmd in cmds {
+                check_command(*cmd, env, ast, tcx)
+                    .context("failed to type check command: seq block")?;
             }
             Ok(())
         }
         Command::IfElse { cond, then, else_ } => {
-            let cond_ty = check_expr(*cond, env, ast, tcx)?;
+            let cond_ty = check_expr(*cond, env, ast, tcx)
+                .context("failed to type check expression: if condition")?;
             if cond_ty != tcx.get_bool() {
-                bail!(TypecheckError::UnexpectedType);
+                Err(anyhow!(TypecheckError::UnexpectedType))
+                    .context("failed to type check expression: if condition must be bool")?;
             }
 
-            env.with_scope(|env| check_command(*then, env, ast, tcx))?;
-            env.with_scope(|env| check_command(*else_, env, ast, tcx))?;
+            env.with_scope(|env| check_command(*then, env, ast, tcx))
+                .context("failed to type check command: if then branch")?;
+            env.with_scope(|env| check_command(*else_, env, ast, tcx))
+                .context("failed to type check command: if else branch")?;
 
             Ok(())
         }
@@ -178,7 +233,8 @@ fn check_command(
             body,
             combine,
         } => {
-            check_pipeline(*pipeline, *body, ast)?;
+            check_pipeline(*pipeline, *body, ast)
+                .context("failed to type check command: for pipeline")?;
 
             env.with_scope(|env| {
                 env.add(
@@ -189,10 +245,18 @@ fn check_command(
                     ),
                     tcx,
                 )
-                .map_err(|_| TypecheckError::AlreadyBound)?;
+                .map_err(|_| TypecheckError::AlreadyBound)
+                .with_context(|| {
+                    format!(
+                        "for range iterator `{}` already bound",
+                        resolve_id(range.id, ast)
+                    )
+                })?;
 
-                check_command(*body, env, ast, tcx)?;
+                check_command(*body, env, ast, tcx)
+                    .context("failed to type check command: for body")?;
                 check_command(*combine, env, ast, tcx)
+                    .context("failed to type check command: for combine")
             })?;
 
             Ok(())
@@ -202,23 +266,30 @@ fn check_command(
             pipeline,
             body,
         } => {
-            check_pipeline(*pipeline, *body, ast)?;
+            check_pipeline(*pipeline, *body, ast)
+                .context("failed to type check command: while pipeline")?;
 
-            let cond_ty = check_expr(*cond, env, ast, tcx)?;
+            let cond_ty = check_expr(*cond, env, ast, tcx)
+                .context("failed to type check expression: while condition")?;
             if cond_ty != tcx.get_bool() {
-                bail!(TypecheckError::UnexpectedType);
+                Err(anyhow!(TypecheckError::UnexpectedType))
+                    .context("failed to type check expression: while condition must be bool")?;
             }
 
-            env.with_scope(|env| check_command(*body, env, ast, tcx))?;
+            env.with_scope(|env| check_command(*body, env, ast, tcx))
+                .context("failed to type check command: while body")?;
 
             Ok(())
         }
         Command::Update { lhs, op: _op, rhs } => {
-            let lhs_ty = check_expr(*lhs, env, ast, tcx)?;
-            let rhs_ty = check_expr(*rhs, env, ast, tcx)?;
+            let lhs_ty = check_expr(*lhs, env, ast, tcx)
+                .context("failed to type check expression: update LHS")?;
+            let rhs_ty = check_expr(*rhs, env, ast, tcx)
+                .context("failed to type check expression: update RHS")?;
 
             if !is_subtype(rhs_ty, lhs_ty, tcx) {
-                bail!(TypecheckError::UnexpectedType);
+                Err(anyhow!(TypecheckError::UnexpectedType))
+                    .context("failed to type check command: update")?;
             }
             Ok(())
         }
@@ -226,10 +297,23 @@ fn check_command(
             if let Some(value) = value {
                 match &ast.exprs[*value] {
                     Expr::ArrayLiteral(vals) => {
-                        let ty = ty.ok_or(TypecheckError::ExplicitTypeMissing)?;
+                        let ty =
+                            ty.ok_or(TypecheckError::ExplicitTypeMissing)
+                                .with_context(|| {
+                                    format!(
+                                        "failed to type check command: let binding `{}` missing explicit type",
+                                        resolve_id(*id, ast)
+                                    )
+                                })?;
                         let resolved_ty = env
                             .resolve_type(ty, tcx)
-                            .map_err(|_| TypecheckError::UnknownAlias)?;
+                            .map_err(|_| TypecheckError::UnknownAlias)
+                            .with_context(|| {
+                                format!(
+                                    "failed to type check command: let binding `{}` type annotation",
+                                    resolve_id(*id, ast)
+                                )
+                            })?;
 
                         let (element_type, dims_len, first_dim_len) = match &tcx.types[resolved_ty]
                         {
@@ -240,66 +324,152 @@ fn check_command(
                                 dims.len(),
                                 dims.first()
                                     .map(|d| d.length)
-                                    .ok_or(TypecheckError::InvalidArrayDims)?,
+                                    .ok_or(TypecheckError::InvalidArrayDims)
+                                    .with_context(|| {
+                                        format!(
+                                            "failed to type check expression: array literal for let binding `{}`",
+                                            resolve_id(*id, ast)
+                                        )
+                                    })?,
                             ),
-                            _ => bail!(TypecheckError::UnexpectedType),
+                            _ => Err(anyhow!(TypecheckError::UnexpectedType)).with_context(
+                                || {
+                                    format!(
+                                        "failed to type check expression: array literal for let binding `{}`",
+                                        resolve_id(*id, ast)
+                                    )
+                                },
+                            )?,
                         };
 
                         if dims_len != 1 {
-                            bail!(TypecheckError::Unsupported(
+                            Err(anyhow!(TypecheckError::Unsupported(
                                 "Multidimensional array literals",
-                            ));
+                            )))
+                            .with_context(|| {
+                                format!(
+                                    "failed to type check expression: array literal for let binding `{}`",
+                                    resolve_id(*id, ast)
+                                )
+                            })?;
                         }
 
                         if first_dim_len != vals.len(&ast.expr_lists) {
-                            bail!(TypecheckError::LiteralLengthMismatch);
+                            Err(anyhow!(TypecheckError::LiteralLengthMismatch)).with_context(
+                                || {
+                                    format!(
+                                        "failed to type check expression: array literal for let binding `{}`",
+                                        resolve_id(*id, ast)
+                                    )
+                                },
+                            )?;
                         }
 
                         for val in vals.as_slice(&ast.expr_lists).iter() {
-                            let val_ty = check_expr(*val, env, ast, tcx)?;
+                            let val_ty = check_expr(*val, env, ast, tcx).with_context(|| {
+                                format!(
+                                    "failed to type check expression: array element for let binding `{}`",
+                                    resolve_id(*id, ast)
+                                )
+                            })?;
                             if !is_subtype(val_ty, element_type, tcx) {
-                                bail!(TypecheckError::UnexpectedType);
+                                Err(anyhow!(TypecheckError::UnexpectedType)).with_context(
+                                    || {
+                                        format!(
+                                            "failed to type check expression: array element for let binding `{}`",
+                                            resolve_id(*id, ast)
+                                        )
+                                    },
+                                )?;
                             }
                         }
 
                         tcx.id_type_map.insert(*id, ty);
                         env.add(*id, resolved_ty, tcx)
-                            .map_err(|_| TypecheckError::AlreadyBound)?;
+                            .map_err(|_| TypecheckError::AlreadyBound)
+                            .with_context(|| format!("`{}` already bound", resolve_id(*id, ast)))?;
                     }
 
                     Expr::RecordLiteral(fields) => {
-                        let ty = ty.ok_or(TypecheckError::ExplicitTypeMissing)?;
+                        let ty =
+                            ty.ok_or(TypecheckError::ExplicitTypeMissing)
+                                .with_context(|| {
+                                    format!(
+                                        "failed to type check command: let binding `{}` missing explicit type",
+                                        resolve_id(*id, ast)
+                                    )
+                                })?;
                         let resolved_ty = env
                             .resolve_type(ty, tcx)
-                            .map_err(|_| TypecheckError::UnknownAlias)?;
+                            .map_err(|_| TypecheckError::UnknownAlias)
+                            .with_context(|| {
+                                format!(
+                                    "failed to type check command: let binding `{}` type annotation",
+                                    resolve_id(*id, ast)
+                                )
+                            })?;
 
                         let mut actual_types = HashMap::new();
-                        for (id, expr) in fields {
-                            let field_ty = check_expr(*expr, env, ast, tcx)?;
-                            actual_types.insert(*id, field_ty);
+                        for (field_id, expr) in fields {
+                            let field_ty = check_expr(*expr, env, ast, tcx).with_context(|| {
+                                format!(
+                                    "failed to type check expression: record field `{}` for let binding `{}`",
+                                    resolve_id(*field_id, ast),
+                                    resolve_id(*id, ast)
+                                )
+                            })?;
+                            actual_types.insert(*field_id, field_ty);
                         }
 
                         let expected_fields = match &tcx.types[resolved_ty] {
                             Type::RecType { fields, .. } => fields,
-                            _ => bail!(TypecheckError::UnexpectedType),
+                            _ => Err(anyhow!(TypecheckError::UnexpectedType)).with_context(
+                                || {
+                                    format!(
+                                        "failed to type check expression: record literal for let binding `{}`",
+                                        resolve_id(*id, ast)
+                                    )
+                                },
+                            )?,
                         };
 
                         for (expected_id, expected_ty) in expected_fields {
                             let actual_ty = actual_types
                                 .remove(expected_id)
-                                .ok_or(TypecheckError::MissingField)?;
+                                .ok_or(TypecheckError::MissingField)
+                                .with_context(|| {
+                                    format!(
+                                        "failed to type check expression: record literal missing field `{}` for let binding `{}`",
+                                        resolve_id(*expected_id, ast),
+                                        resolve_id(*id, ast),
+                                    )
+                                })?;
 
                             if !is_subtype(actual_ty, *expected_ty, tcx) {
-                                bail!(TypecheckError::UnexpectedType);
+                                Err(anyhow!(TypecheckError::UnexpectedType)).with_context(
+                                    || {
+                                        format!(
+                                            "failed to type check expression: record field `{}` for let binding `{}`",
+                                            resolve_id(*expected_id, ast),
+                                            resolve_id(*id, ast)
+                                        )
+                                    },
+                                )?;
                             }
                         }
 
                         if !actual_types.is_empty() {
-                            bail!(TypecheckError::ExtraFields);
+                            Err(anyhow!(TypecheckError::ExtraFields)).with_context(|| {
+                                format!(
+                                    "failed to type check expression: record literal for let binding `{}`",
+                                    resolve_id(*id, ast)
+                                )
+                            })?;
                         }
 
                         env.add(*id, resolved_ty, tcx)
-                            .map_err(|_| TypecheckError::AlreadyBound)?;
+                            .map_err(|_| TypecheckError::AlreadyBound)
+                            .with_context(|| format!("`{}` already bound", resolve_id(*id, ast)))?;
                     }
                     _ => {
                         let resolved_ty = ty
@@ -307,9 +477,20 @@ fn check_command(
                                 env.resolve_type(ty, tcx)
                                     .map_err(|_| TypecheckError::UnknownAlias)
                             })
-                            .transpose()?;
+                            .transpose()
+                            .with_context(|| {
+                                format!(
+                                    "failed to type check command: let binding `{}` type annotation",
+                                    resolve_id(*id, ast)
+                                )
+                            })?;
 
-                        let val_ty = check_expr(*value, env, ast, tcx)?;
+                        let val_ty = check_expr(*value, env, ast, tcx).with_context(|| {
+                            format!(
+                                "failed to type check expression: value for let binding `{}`",
+                                resolve_id(*id, ast)
+                            )
+                        })?;
 
                         if let Some(resolved_ty) = resolved_ty {
                             let resolved_ty = match &tcx.types[resolved_ty] {
@@ -319,10 +500,20 @@ fn check_command(
                             };
 
                             if !is_subtype(val_ty, resolved_ty, tcx) {
-                                bail!(TypecheckError::UnexpectedType);
+                                Err(anyhow!(TypecheckError::UnexpectedType)).with_context(
+                                    || {
+                                        format!(
+                                            "failed to type check expression: value for let binding `{}`",
+                                            resolve_id(*id, ast)
+                                        )
+                                    },
+                                )?;
                             }
                             env.add(*id, resolved_ty, tcx)
-                                .map_err(|_| TypecheckError::AlreadyBound)?;
+                                .map_err(|_| TypecheckError::AlreadyBound)
+                                .with_context(|| {
+                                    format!("`{}` already bound", resolve_id(*id, ast))
+                                })?;
                         } else {
                             let typ = match &tcx.types[val_ty] {
                                 Type::StaticInt(v) => tcx.get_bit(bits_needed(*v), false),
@@ -331,17 +522,34 @@ fn check_command(
                             };
 
                             env.add(*id, typ, tcx)
-                                .map_err(|_| TypecheckError::AlreadyBound)?;
+                                .map_err(|_| TypecheckError::AlreadyBound)
+                                .with_context(|| {
+                                    format!("`{}` already bound", resolve_id(*id, ast))
+                                })?;
                         }
                     }
                 }
             } else {
-                let ty = ty.ok_or(TypecheckError::ExplicitTypeMissing)?;
+                let ty = ty
+                    .ok_or(TypecheckError::ExplicitTypeMissing)
+                    .with_context(|| {
+                        format!(
+                            "failed to type check command: let binding `{}` missing explicit type",
+                            resolve_id(*id, ast)
+                        )
+                    })?;
                 let resolved_ty = env
                     .resolve_type(ty, tcx)
-                    .map_err(|_| TypecheckError::UnknownAlias)?;
+                    .map_err(|_| TypecheckError::UnknownAlias)
+                    .with_context(|| {
+                        format!(
+                            "failed to type check command: let binding `{}` type annotation",
+                            resolve_id(*id, ast)
+                        )
+                    })?;
                 env.add(*id, resolved_ty, tcx)
-                    .map_err(|_| TypecheckError::AlreadyBound)?;
+                    .map_err(|_| TypecheckError::AlreadyBound)
+                    .with_context(|| format!("`{}` already bound", resolve_id(*id, ast)))?;
             }
 
             Ok(())
@@ -364,80 +572,141 @@ fn check_expr_(
             Err(anyhow!(TypecheckError::NotInBinder))
         }
         Expr::Cast { expr, ty: cast_ty } => {
-            check_expr(*expr, env, ast, tcx)?;
+            check_expr(*expr, env, ast, tcx)
+                .context("failed to type check expression: cast operand")?;
             // TODO: safe cast check
             Ok(*cast_ty)
         }
         Expr::Id(id) => {
-            let ty = env.get(id).ok_or(TypecheckError::Unbound)?;
+            let ty = env
+                .get(id)
+                .ok_or(TypecheckError::Unbound)
+                .with_context(|| format!("`{}` unbound", resolve_id(*id, ast)))?;
             tcx.id_type_map.insert(*id, ty);
             Ok(ty)
         }
         Expr::BinOp { left, op, right } => {
-            let t1 = check_expr(*left, env, ast, tcx)?;
-            let t2 = check_expr(*right, env, ast, tcx)?;
-            Ok(check_binop(t1, t2, op.clone(), ast, tcx)?)
+            let t1 = check_expr(*left, env, ast, tcx)
+                .context("failed to type check expression: binary operator LHS")?;
+            let t2 = check_expr(*right, env, ast, tcx)
+                .context("failed to type check expression: binary operator RHS")?;
+            Ok(check_binop(t1, t2, op.clone(), ast, tcx)
+                .context("failed to type check binary operation")?)
         }
         Expr::Application { func, args } => {
-            let func_ty = env.get(func).ok_or(TypecheckError::Unbound)?;
+            let func_ty = env
+                .get(func)
+                .ok_or(TypecheckError::Unbound)
+                .with_context(|| {
+                    format!(
+                        "failed to type check expression: function application `{}`",
+                        resolve_id(*func, ast)
+                    )
+                })?;
 
             let (arg_types, ret) = match &tcx.types[func_ty] {
                 Type::Func {
                     args: arg_types,
                     ret,
                 } => (*arg_types, *ret),
-                _ => bail!(TypecheckError::UnexpectedType),
+                _ => Err(anyhow!(TypecheckError::UnexpectedType))
+                    .context("failed to type check expression: function application callee")?,
             };
 
             if arg_types.len(&tcx.type_lists) != args.len(&ast.expr_lists) {
-                bail!(TypecheckError::ArgLengthMismatch);
+                Err(anyhow!(TypecheckError::ArgLengthMismatch))
+                    .context("failed to type check expression: function application arguments")?;
             }
 
             for i in 0..args.len(&ast.expr_lists) {
                 let expected_ty = arg_types.as_slice(&tcx.type_lists)[i];
-                let arg_ty = check_expr(args.as_slice(&ast.expr_lists)[i], env, ast, tcx)?;
+                let arg_ty = check_expr(args.as_slice(&ast.expr_lists)[i], env, ast, tcx)
+                    .with_context(|| {
+                        format!(
+                            "failed to type check expression: function application argument {}",
+                            i
+                        )
+                    })?;
                 if !is_subtype(arg_ty, expected_ty, tcx) {
-                    bail!(TypecheckError::UnexpectedType);
+                    Err(anyhow!(TypecheckError::UnexpectedType)).with_context(|| {
+                        format!(
+                            "failed to type check expression: function application argument {}",
+                            i
+                        )
+                    })?;
                 }
             }
 
             Ok(ret)
         }
         Expr::RecordAccess { record, field } => {
-            let record_ty = check_expr(*record, env, ast, tcx)?;
+            let record_ty = check_expr(*record, env, ast, tcx)
+                .context("failed to type check expression: record access")?;
 
             let fields = match &tcx.types[record_ty] {
                 Type::RecType { fields, .. } => fields,
-                _ => bail!(TypecheckError::UnexpectedType),
+                _ => Err(anyhow!(TypecheckError::UnexpectedType))
+                    .context("failed to type check expression: record access")?,
             };
 
             fields
                 .get(field)
                 .copied()
                 .ok_or_else(|| anyhow!(TypecheckError::UnknownRecordField))
+                .with_context(|| {
+                    format!(
+                        "failed to type check expression: record field `{}`",
+                        resolve_id(*field, ast)
+                    )
+                })
         }
         Expr::ArrayAccess { array, indices } => {
-            let (element_ty, dims_len) =
-                match &tcx.types[env.get(array).ok_or(TypecheckError::Unbound)?] {
-                    Type::Array {
-                        element_type, dims, ..
-                    } => (*element_type, dims.len()),
-                    _ => bail!(TypecheckError::UnexpectedType),
-                };
+            let (element_ty, dims_len) = match &tcx.types[env
+                .get(array)
+                .ok_or(TypecheckError::Unbound)
+                .with_context(|| {
+                    format!(
+                        "failed to type check expression: array access `{}`",
+                        resolve_id(*array, ast)
+                    )
+                })?] {
+                Type::Array {
+                    element_type, dims, ..
+                } => (*element_type, dims.len()),
+                _ => Err(anyhow!(TypecheckError::UnexpectedType)).with_context(|| {
+                    format!(
+                        "failed to type check expression: array access `{}`",
+                        resolve_id(*array, ast)
+                    )
+                })?,
+            };
 
             if indices.len(&ast.expr_lists) != dims_len {
-                bail!(TypecheckError::IncorrectAccessDims);
+                Err(anyhow!(TypecheckError::IncorrectAccessDims)).with_context(|| {
+                    format!(
+                        "failed to type check expression: array access `{}` indices",
+                        resolve_id(*array, ast)
+                    )
+                })?;
             }
 
             indices
                 .as_slice(&ast.expr_lists)
                 .iter()
                 .try_for_each(|idx| -> Result<()> {
-                    let idx_ty = check_expr(*idx, env, ast, tcx)?;
+                    let idx_ty = check_expr(*idx, env, ast, tcx)
+                        .context("failed to type check expression: array index")?;
                     match &tcx.types[idx_ty] {
                         Type::StaticInt(..) | Type::Bit { .. } | Type::Index { .. } => Ok(()),
-                        _ => Err(anyhow!(TypecheckError::UnexpectedType)),
+                        _ => Err(anyhow!(TypecheckError::UnexpectedType))
+                            .context("failed to type check expression: array index"),
                     }
+                })
+                .with_context(|| {
+                    format!(
+                        "failed to type check expression: array access `{}` indices",
+                        resolve_id(*array, ast)
+                    )
                 })?;
 
             tcx.id_type_map.insert(*array, element_ty);
