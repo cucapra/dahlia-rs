@@ -326,9 +326,9 @@ pub struct ForRange {
     pub id: Id,
     pub ty: Option<TypeId>,
     pub rev: bool,
-    pub start: usize,
-    pub end: usize,
-    pub unroll: usize,
+    pub start: i64,
+    pub end: i64,
+    pub unroll: i64,
 }
 
 #[derive(Debug)]

@@ -2,7 +2,7 @@ use std::ops::{Add, Div, Mul, Rem, Sub};
 
 use crate::ast::{InfixOp, Type, TypeContext, TypeId};
 
-fn bits_needed(n: i64) -> usize {
+pub fn bits_needed(n: i64) -> usize {
     match n {
         0 => 1,
         n if n > 0 => (u64::BITS - (n as u64).leading_zeros()) as usize,

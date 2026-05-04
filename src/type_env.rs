@@ -15,6 +15,7 @@ pub struct TypeEnv {
 pub enum TypeEnvError {
     Unbound,
     AlreadyBound,
+    UnknownAlias,
 }
 
 impl Display for TypeEnvError {
@@ -22,6 +23,7 @@ impl Display for TypeEnvError {
         match self {
             TypeEnvError::Unbound => write!(f, "Type is unbound"),
             TypeEnvError::AlreadyBound => write!(f, "Type is already bound"),
+            TypeEnvError::UnknownAlias => write!(f, "Unknown alias"),
         }
     }
 }
@@ -50,12 +52,18 @@ impl TypeEnv {
         self.typedefs.get(id).copied()
     }
 
-    pub fn resolve_type(&self, type_id: TypeId, tcx: &mut TypeContext) -> Option<TypeId> {
-        let r#type = match tcx.types.get(type_id)? {
-            Type::Alias(id) => return self.get_type(id),
+    pub fn resolve_type(
+        &self,
+        type_id: TypeId,
+        tcx: &mut TypeContext,
+    ) -> Result<TypeId, TypeEnvError> {
+        let r#type = match tcx.types.get(type_id).expect("Type ID not found") {
+            Type::Alias(id) => {
+                return self.get_type(id).ok_or(TypeEnvError::UnknownAlias);
+            }
             func @ Type::Func { .. } => func.clone(),
             arr @ Type::Array { .. } => arr.clone(),
-            _ => return Some(type_id),
+            _ => return Ok(type_id),
         };
 
         match r#type {
@@ -65,9 +73,9 @@ impl TypeEnv {
                 let resolved_args = resolved_args
                     .into_iter()
                     .map(|arg| self.resolve_type(arg, tcx))
-                    .collect::<Option<Vec<_>>>()?;
+                    .collect::<Result<Vec<_>, _>>()?;
                 let resolved_ret = self.resolve_type(ret, tcx)?;
-                Some(tcx.get_func(resolved_args, resolved_ret))
+                Ok(tcx.get_func(resolved_args, resolved_ret))
             }
             Type::Array {
                 element_type,
@@ -75,7 +83,7 @@ impl TypeEnv {
                 ports,
             } => {
                 let resolved_element_type = self.resolve_type(element_type, tcx)?;
-                Some(tcx.get_array(resolved_element_type, dims, ports))
+                Ok(tcx.get_array(resolved_element_type, dims, ports))
             }
             _ => unreachable!(),
         }
@@ -92,11 +100,7 @@ impl TypeEnv {
         tcx: &mut TypeContext,
     ) -> Result<(), TypeEnvError> {
         self.type_map
-            .add(
-                id,
-                self.resolve_type(type_id, tcx)
-                    .expect("Type should resolve"),
-            )
+            .add(id, self.resolve_type(type_id, tcx)?)
             .map_err(|_| TypeEnvError::AlreadyBound)
     }
 

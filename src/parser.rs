@@ -48,7 +48,11 @@ impl DahliaParser {
 
     fn iden(input: Node) -> Result<Id> {
         let context = *input.user_data();
-        Ok(context.borrow_mut().ast.ids.push(input.as_str().to_string()))
+        Ok(context
+            .borrow_mut()
+            .ast
+            .ids
+            .push(input.as_str().to_string()))
     }
 
     fn ty_float(input: Node) -> Result<TypeId> {
@@ -199,7 +203,11 @@ impl DahliaParser {
         let context = *input.user_data();
         match input.as_str() {
             "true" => Ok(context.borrow_mut().ast.exprs.push(Expr::BoolLiteral(true))),
-            "false" => Ok(context.borrow_mut().ast.exprs.push(Expr::BoolLiteral(false))),
+            "false" => Ok(context
+                .borrow_mut()
+                .ast
+                .exprs
+                .push(Expr::BoolLiteral(false))),
             _ => unreachable!(),
         }
     }
@@ -462,10 +470,10 @@ impl DahliaParser {
 
     fn for_range(input: Node) -> Result<ForRange> {
         Ok(match_nodes!(input.into_children();
-            [iden(id), ty(ty), for_rev(rev), number(start), number(end), number(unroll)] => ForRange{id, ty: Some(ty), rev, start, end, unroll},
-            [iden(id), ty(ty), for_rev(rev), number(start), number(end), ] => ForRange{id, ty: Some(ty), rev, start, end, unroll:1},
-            [iden(id), for_rev(rev), number(start), number(end), number(unroll)] => ForRange{id, ty: None, rev, start, end, unroll},
-            [iden(id), for_rev(rev), number(start), number(end)] => ForRange{id, ty: None, rev, start, end, unroll:1},
+            [iden(id), ty(ty), for_rev(rev), number(start), number(end), number(unroll)] => ForRange{id, ty: Some(ty), rev, start:start.try_into().unwrap(), end:end.try_into().unwrap(), unroll:unroll.try_into().unwrap()},
+            [iden(id), ty(ty), for_rev(rev), number(start), number(end), ] => ForRange{id, ty: Some(ty), rev, start:start.try_into().unwrap(), end:end.try_into().unwrap(), unroll:1},
+            [iden(id), for_rev(rev), number(start), number(end), number(unroll)] => ForRange{id, ty: None, rev, start:start.try_into().unwrap(), end:end.try_into().unwrap(), unroll:unroll.try_into().unwrap()},
+            [iden(id), for_rev(rev), number(start), number(end)] => ForRange{id, ty: None, rev, start:start.try_into().unwrap(), end:end.try_into().unwrap(), unroll:1},
         ))
     }
 

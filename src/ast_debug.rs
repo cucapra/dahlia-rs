@@ -89,9 +89,9 @@ struct DebugForRange<'a> {
     id: &'a str,
     ty: Option<DebugType<'a>>,
     rev: bool,
-    start: usize,
-    end: usize,
-    unroll: usize,
+    start: i64,
+    end: i64,
+    unroll: i64,
 }
 
 #[derive(Debug)]
