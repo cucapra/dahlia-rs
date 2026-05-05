@@ -1,9 +1,3 @@
-use crate::ast::{Ast, Id};
-
-pub fn resolve_id(id: Id, ast: &Ast) -> &str {
-    ast.ids.get(id).unwrap().as_str()
-}
-
 pub fn bits_needed(n: i64) -> usize {
     match n {
         0 => 1,

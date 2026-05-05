@@ -1,19 +1,71 @@
-use std::cell::RefCell;
 use std::collections::HashMap;
+use std::{cell::RefCell, hash::Hash};
 
 use cranelift_entity::{EntityList, ListPool, PrimaryMap, SecondaryMap, entity_impl};
 
-#[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord, Default)]
 pub struct ExprId(u32);
 entity_impl!(ExprId, "expr");
 
-#[derive(Clone, Copy, Hash, Eq, PartialEq)]
+#[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord, Default)]
 pub struct CommandId(u32);
-entity_impl!(CommandId, "cmd");
+entity_impl!(CommandId, "command");
 
-#[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord)]
-pub struct Id(u32);
-entity_impl!(Id, "id");
+#[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord, Default)]
+pub struct Symbol(u32);
+entity_impl!(Symbol, "symbol");
+
+pub trait IdResolve {
+    fn resolve_id<'a>(&self, ast: &'a Ast) -> &'a str;
+}
+
+#[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord, Default)]
+pub struct FuncId(u32);
+entity_impl!(FuncId, "func");
+
+impl IdResolve for FuncId {
+    fn resolve_id<'a>(&self, ast: &'a Ast) -> &'a str {
+        ast.symbols
+            .get(*ast.funcs.get(*self).expect("Function ID not found"))
+            .expect("symbol not found")
+    }
+}
+
+#[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord, Default)]
+pub struct ValueId(u32);
+entity_impl!(ValueId, "value");
+
+impl IdResolve for ValueId {
+    fn resolve_id<'a>(&self, ast: &'a Ast) -> &'a str {
+        ast.symbols
+            .get(*ast.values.get(*self).expect("Value ID not found"))
+            .expect("symbol not found")
+    }
+}
+
+#[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord, Default)]
+pub struct RecordId(u32);
+entity_impl!(RecordId, "record");
+
+impl IdResolve for RecordId {
+    fn resolve_id<'a>(&self, ast: &'a Ast) -> &'a str {
+        ast.symbols
+            .get(*ast.records.get(*self).expect("Record ID not found"))
+            .expect("symbol not found")
+    }
+}
+
+#[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord, Default)]
+pub struct FieldId(u32);
+entity_impl!(FieldId, "field");
+
+impl IdResolve for FieldId {
+    fn resolve_id<'a>(&self, ast: &'a Ast) -> &'a str {
+        ast.symbols
+            .get(*ast.fields.get(*self).expect("Field ID not found"))
+            .expect("symbol not found")
+    }
+}
 
 #[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord, Default)]
 pub struct TypeId(u32);
@@ -22,10 +74,70 @@ entity_impl!(TypeId, "typ");
 #[derive(Debug, Default)]
 pub struct Ast {
     pub exprs: PrimaryMap<ExprId, Expr>,
-    pub commands: PrimaryMap<CommandId, Command>,
     pub expr_lists: ListPool<ExprId>,
+
+    pub commands: PrimaryMap<CommandId, Command>,
     pub command_lists: ListPool<CommandId>,
-    pub ids: PrimaryMap<Id, String>,
+
+    pub symbols: PrimaryMap<Symbol, String>,
+    symbol_lookup: HashMap<String, Symbol>,
+
+    pub funcs: PrimaryMap<FuncId, Symbol>,
+    func_lookup: HashMap<Symbol, FuncId>,
+
+    pub values: PrimaryMap<ValueId, Symbol>,
+
+    pub records: PrimaryMap<RecordId, Symbol>,
+    record_lookup: HashMap<Symbol, RecordId>,
+
+    pub fields: PrimaryMap<FieldId, Symbol>,
+    field_lookup: HashMap<Symbol, FieldId>,
+}
+
+impl Ast {
+    pub fn get_symbol(&mut self, name: &str) -> Symbol {
+        if let Some(&sym) = self.symbol_lookup.get(name) {
+            sym
+        } else {
+            let sym = self.symbols.push(name.to_string());
+            self.symbol_lookup.insert(name.to_string(), sym);
+            sym
+        }
+    }
+
+    pub fn get_func(&mut self, symbol: Symbol) -> FuncId {
+        if let Some(&func) = self.func_lookup.get(&symbol) {
+            func
+        } else {
+            let func = self.funcs.push(symbol);
+            self.func_lookup.insert(symbol, func);
+            func
+        }
+    }
+
+    pub fn get_record(&mut self, symbol: Symbol) -> RecordId {
+        if let Some(&record) = self.record_lookup.get(&symbol) {
+            record
+        } else {
+            let record = self.records.push(symbol);
+            self.record_lookup.insert(symbol, record);
+            record
+        }
+    }
+
+    pub fn get_field(&mut self, symbol: Symbol) -> FieldId {
+        if let Some(&field) = self.field_lookup.get(&symbol) {
+            field
+        } else {
+            let field = self.fields.push(symbol);
+            self.field_lookup.insert(symbol, field);
+            field
+        }
+    }
+
+    pub fn get_value(&mut self, symbol: Symbol) -> ValueId {
+        self.values.push(symbol)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -33,8 +145,11 @@ pub struct TypeContext {
     pub types: PrimaryMap<TypeId, Type>,
     pub type_lists: ListPool<TypeId>,
     pub type_map: HashMap<TypeKey, TypeId>,
-    pub id_type_map: SecondaryMap<Id, TypeId>,
+
     pub expr_type_map: SecondaryMap<ExprId, TypeId>,
+
+    pub func_type_map: HashMap<FuncId, TypeId>,
+    pub value_type_map: HashMap<ValueId, TypeId>,
 }
 
 #[derive(Debug, Default)]
@@ -57,7 +172,7 @@ pub enum Type {
         length_int: usize,
         unsigned: bool,
     },
-    Alias(Id),
+    Alias(RecordId),
     Array {
         element_type: TypeId,
         dims: Vec<DimSpec>,
@@ -75,8 +190,8 @@ pub enum Type {
         ret: TypeId,
     },
     RecType {
-        name: Id,
-        fields: HashMap<Id, TypeId>,
+        name: RecordId,
+        fields: HashMap<FieldId, TypeId>,
     },
 }
 
@@ -94,7 +209,7 @@ pub enum TypeKey {
         length_int: usize,
         unsigned: bool,
     },
-    Alias(Id),
+    Alias(RecordId),
     Array {
         element_type: TypeId,
         dims: Vec<DimSpec>,
@@ -112,8 +227,8 @@ pub enum TypeKey {
         ret: TypeId,
     },
     RecType {
-        name: Id,
-        fields: Vec<(Id, TypeId)>,
+        name: RecordId,
+        fields: Vec<(FieldId, TypeId)>,
     },
 }
 
@@ -163,7 +278,7 @@ impl TypeContext {
             .clone()
     }
 
-    pub fn get_alias(&mut self, name: Id) -> TypeId {
+    pub fn get_alias(&mut self, name: RecordId) -> TypeId {
         self.type_map
             .entry(TypeKey::Alias(name.clone()))
             .or_insert_with(|| self.types.push(Type::Alias(name)))
@@ -230,7 +345,7 @@ impl TypeContext {
             .clone()
     }
 
-    pub fn get_rec_type(&mut self, name: Id, fields: HashMap<Id, TypeId>) -> TypeId {
+    pub fn get_rec_type(&mut self, name: RecordId, fields: HashMap<FieldId, TypeId>) -> TypeId {
         let mut field_key: Vec<_> = fields.iter().map(|(k, v)| (k.clone(), *v)).collect();
         field_key.sort();
 
@@ -280,7 +395,7 @@ pub enum Expr {
     },
 
     ArrayLiteral(EntityList<ExprId>),
-    RecordLiteral(HashMap<Id, ExprId>),
+    RecordLiteral(HashMap<FieldId, ExprId>),
 
     RationalLiteral(String),
     IntLiteral {
@@ -290,20 +405,20 @@ pub enum Expr {
     BoolLiteral(bool),
 
     ArrayAccess {
-        array: Id,
+        array: ValueId,
         indices: EntityList<ExprId>,
     },
     RecordAccess {
         record: ExprId,
-        field: Id,
+        field: FieldId,
     },
 
     Application {
-        func: Id,
+        func: FuncId,
         args: EntityList<ExprId>,
     },
 
-    Id(Id),
+    Id(ValueId),
 
     BinOp {
         left: ExprId,
@@ -323,7 +438,7 @@ pub enum AssignOp {
 
 #[derive(Debug)]
 pub struct ForRange {
-    pub id: Id,
+    pub iter: ValueId,
     pub ty: Option<TypeId>,
     pub rev: bool,
     pub start: i64,
@@ -337,7 +452,7 @@ pub enum Command {
     Par(Vec<CommandId>),
     Seq(Vec<CommandId>),
     Let {
-        id: Id,
+        id: ValueId,
         ty: Option<TypeId>,
         value: Option<ExprId>,
     },
@@ -347,13 +462,13 @@ pub enum Command {
         rhs: ExprId,
     },
     View {
-        id: Id,
-        arr_id: Id,
+        id: ValueId,
+        arr_id: ValueId,
         dims: Vec<View>,
     },
     Split {
-        id: Id,
-        arr_id: Id,
+        id: ValueId,
+        arr_id: ValueId,
         dims: Vec<usize>,
     },
     Return(ExprId),
@@ -379,13 +494,13 @@ pub enum Command {
 
 #[derive(Debug)]
 pub struct Decl {
-    pub id: Id,
+    pub id: ValueId,
     pub ty: TypeId,
 }
 
 #[derive(Debug)]
 pub struct FuncSig {
-    pub name: Id,
+    pub name: FuncId,
     pub args: Vec<Decl>,
     pub ret_ty: TypeId,
 }
@@ -397,8 +512,8 @@ pub enum Def {
         body: CommandId,
     },
     Record {
-        name: Id,
-        fields: HashMap<Id, TypeId>,
+        name: RecordId,
+        fields: HashMap<FieldId, TypeId>,
     },
 }
 

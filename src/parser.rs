@@ -5,8 +5,8 @@ use pest::pratt_parser::PrattParser;
 use pest_consume::{Error, Parser, match_nodes};
 
 use crate::ast::{
-    AssignOp, Backend, Command, CommandId, Context, Decl, Def, DimSpec, Expr, ExprId, ForRange,
-    FuncSig, Id, Include, InfixOp, Program, Suffix, TypeId, View,
+    AssignOp, Backend, Command, CommandId, Context, Decl, Def, DimSpec, Expr, ExprId, FieldId,
+    ForRange, FuncSig, Include, InfixOp, Program, Suffix, Symbol, TypeId, View,
 };
 
 type Result<T> = std::result::Result<T, Error<Rule>>;
@@ -46,13 +46,9 @@ impl DahliaParser {
         Ok(input.as_str().parse().unwrap())
     }
 
-    fn iden(input: Node) -> Result<Id> {
+    fn iden(input: Node) -> Result<Symbol> {
         let context = *input.user_data();
-        Ok(context
-            .borrow_mut()
-            .ast
-            .ids
-            .push(input.as_str().to_string()))
+        Ok(context.borrow_mut().ast.get_symbol(input.as_str()))
     }
 
     fn ty_float(input: Node) -> Result<TypeId> {
@@ -108,7 +104,10 @@ impl DahliaParser {
             [ty_ubit(t)] => Ok(t),
             [ty_fix(t)] => Ok(t),
             [ty_ufix(t)] => Ok(t),
-            [iden(id)] => Ok(context.borrow_mut().tcx.get_alias(id))
+            [iden(sym)] => {
+                let id = context.borrow_mut().ast.get_record(sym);
+                Ok(context.borrow_mut().tcx.get_alias(id))
+            }
         )
     }
 
@@ -135,9 +134,10 @@ impl DahliaParser {
         ))
     }
 
-    fn rec_lit_field<'i, 'a>(input: Node<'i, 'a>) -> Result<(Id, ExprId)> {
+    fn rec_lit_field<'i, 'a>(input: Node<'i, 'a>) -> Result<(FieldId, ExprId)> {
+        let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
-            [iden(id), expr(e)] => (id, e)
+            [iden(sym), expr(e)] => (context.borrow_mut().ast.get_field(sym), e)
         ))
     }
 
@@ -156,8 +156,9 @@ impl DahliaParser {
     fn array_access<'i, 'a>(input: Node<'i, 'a>) -> Result<ExprId> {
         let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
-            [iden(array), expr(indices)..] => {
+            [iden(sym), expr(indices)..] => {
                 let mut context = context.borrow_mut();
+                let array = context.ast.get_value(sym);
                 let indices = EntityList::from_iter(indices, &mut context.ast.expr_lists);
                 context.ast.exprs.push(Expr::ArrayAccess{array, indices})
             }
@@ -215,9 +216,14 @@ impl DahliaParser {
     fn app<'i, 'a>(input: Node<'i, 'a>) -> Result<ExprId> {
         let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
-            [iden(func)] => context.borrow_mut().ast.exprs.push(Expr::Application{func, args: EntityList::new()}),
-            [iden(func), expr(args)..] => {
+            [iden(sym)] => {
                 let mut context = context.borrow_mut();
+                let func = context.ast.get_func(sym);
+                context.ast.exprs.push(Expr::Application{func, args: EntityList::new()})
+            },
+            [iden(sym), expr(args)..] => {
+                let mut context = context.borrow_mut();
+                let func = context.ast.get_func(sym);
                 let args = EntityList::from_iter(args, &mut context.ast.expr_lists);
                 context.ast.exprs.push(Expr::Application{func, args})
             }
@@ -236,7 +242,11 @@ impl DahliaParser {
             [boolean(e)] => e,
             [array_access(e)] => e,
             [app(e)] => e,
-            [iden(id)] => context.borrow_mut().ast.exprs.push(Expr::Id(id)),
+            [iden(sym)] => {
+                let mut context = context.borrow_mut();
+                let id = context.ast.get_value(sym);
+                context.ast.exprs.push(Expr::Id(id))
+            },
             [expr(e)] => e
         ))
     }
@@ -245,9 +255,11 @@ impl DahliaParser {
         let context = *input.user_data();
         match_nodes!(input.into_children();
             [primary(e)] => Ok(e),
-            [primary(e), iden(fields)..] => Ok(
-                fields.into_iter().fold(e, |acc, field| context.borrow_mut().ast.exprs.push(Expr::RecordAccess{record: acc, field}))
-            )
+            [primary(e), iden(fields)..] => Ok(fields.into_iter().fold(e, |acc, sym| {
+                let mut context = context.borrow_mut();
+                let field = context.ast.get_field(sym);
+                context.ast.exprs.push(Expr::RecordAccess{record: acc, field})
+            }))
         )
     }
 
@@ -292,10 +304,26 @@ impl DahliaParser {
     fn let_stmt<'i, 'a>(input: Node<'i, 'a>) -> Result<CommandId> {
         let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
-            [iden(id), ty(ty), expr(value)] => context.borrow_mut().ast.commands.push(Command::Let{id, ty: Some(ty), value: Some(value)}),
-            [iden(id), ty(ty)] => context.borrow_mut().ast.commands.push(Command::Let{id, ty: Some(ty), value: None}),
-            [iden(id), expr(value)] => context.borrow_mut().ast.commands.push(Command::Let{id, ty: None, value: Some(value)}),
-            [iden(id)] => context.borrow_mut().ast.commands.push(Command::Let{id, ty: None, value: None})
+            [iden(sym), ty(ty), expr(value)] => {
+                let mut context = context.borrow_mut();
+                let id = context.ast.get_value(sym);
+                context.ast.commands.push(Command::Let{id, ty: Some(ty), value: Some(value)})
+            },
+            [iden(sym), ty(ty)] => {
+                let mut context = context.borrow_mut();
+                let id = context.ast.get_value(sym);
+                context.ast.commands.push(Command::Let{id, ty: Some(ty), value: None})
+            },
+            [iden(sym), expr(value)] => {
+                let mut context = context.borrow_mut();
+                let id = context.ast.get_value(sym);
+                context.ast.commands.push(Command::Let{id, ty: None, value: Some(value)})
+            },
+            [iden(sym)] => {
+                let mut context = context.borrow_mut();
+                let id = context.ast.get_value(sym);
+                context.ast.commands.push(Command::Let{id, ty: None, value: None})
+            }
         ))
     }
 
@@ -372,7 +400,12 @@ impl DahliaParser {
     fn view<'i, 'a>(input: Node<'i, 'a>) -> Result<CommandId> {
         let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
-            [iden(id), iden(arr_id), view_param(dims)..] => context.borrow_mut().ast.commands.push(Command::View{id, arr_id, dims: dims.into_iter().collect()})
+            [iden(id_sym), iden(arr_sym), view_param(dims)..] => {
+                let mut context = context.borrow_mut();
+                let id = context.ast.get_value(id_sym);
+                let arr_id = context.ast.get_value(arr_sym);
+                context.ast.commands.push(Command::View{id, arr_id, dims: dims.into_iter().collect()})
+            }
         ))
     }
 
@@ -385,7 +418,12 @@ impl DahliaParser {
     fn split<'i, 'a>(input: Node<'i, 'a>) -> Result<CommandId> {
         let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
-            [iden(id), iden(arr_id), split_factor(dims)..] => context.borrow_mut().ast.commands.push(Command::Split{id, arr_id, dims: dims.into_iter().collect()})
+            [iden(id_sym), iden(arr_sym), split_factor(dims)..] => {
+                let mut context = context.borrow_mut();
+                let id = context.ast.get_value(id_sym);
+                let arr_id = context.ast.get_value(arr_sym);
+                context.ast.commands.push(Command::Split{id, arr_id, dims: dims.into_iter().collect()})
+            }
         ))
     }
 
@@ -469,11 +507,24 @@ impl DahliaParser {
     }
 
     fn for_range(input: Node) -> Result<ForRange> {
+        let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
-            [iden(id), ty(ty), for_rev(rev), number(start), number(end), number(unroll)] => ForRange{id, ty: Some(ty), rev, start:start.try_into().unwrap(), end:end.try_into().unwrap(), unroll:unroll.try_into().unwrap()},
-            [iden(id), ty(ty), for_rev(rev), number(start), number(end), ] => ForRange{id, ty: Some(ty), rev, start:start.try_into().unwrap(), end:end.try_into().unwrap(), unroll:1},
-            [iden(id), for_rev(rev), number(start), number(end), number(unroll)] => ForRange{id, ty: None, rev, start:start.try_into().unwrap(), end:end.try_into().unwrap(), unroll:unroll.try_into().unwrap()},
-            [iden(id), for_rev(rev), number(start), number(end)] => ForRange{id, ty: None, rev, start:start.try_into().unwrap(), end:end.try_into().unwrap(), unroll:1},
+            [iden(iter_sym), ty(ty), for_rev(rev), number(start), number(end), number(unroll)] => {
+                let iter = context.borrow_mut().ast.get_value(iter_sym);
+                ForRange{iter, ty: Some(ty), rev, start:start.try_into().unwrap(), end:end.try_into().unwrap(), unroll:unroll.try_into().unwrap()}
+            },
+            [iden(iter_sym), ty(ty), for_rev(rev), number(start), number(end), ] => {
+                let iter = context.borrow_mut().ast.get_value(iter_sym);
+                ForRange{iter, ty: Some(ty), rev, start:start.try_into().unwrap(), end:end.try_into().unwrap(), unroll:1}
+            },
+            [iden(iter_sym), for_rev(rev), number(start), number(end), number(unroll)] => {
+                let iter = context.borrow_mut().ast.get_value(iter_sym);
+                ForRange{iter, ty: None, rev, start:start.try_into().unwrap(), end:end.try_into().unwrap(), unroll:unroll.try_into().unwrap()}
+            },
+            [iden(iter_sym), for_rev(rev), number(start), number(end)] => {
+                let iter = context.borrow_mut().ast.get_value(iter_sym);
+                ForRange{iter, ty: None, rev, start:start.try_into().unwrap(), end:end.try_into().unwrap(), unroll:1}
+            },
         ))
     }
 
@@ -523,35 +574,55 @@ impl DahliaParser {
         )
     }
 
-    fn arg(input: Node) -> Result<Decl> {
+    fn arg(input: Node) -> Result<(Symbol, TypeId)> {
         Ok(match_nodes!(input.into_children();
-            [iden(id), ty(ty)] => Decl{id, ty}
+            [iden(sym), ty(ty)] => (sym, ty)
         ))
     }
 
     fn func_args(input: Node) -> Result<Vec<Decl>> {
+        let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
-            [arg(arg)..] => arg.into_iter().collect()
+            [arg(args)..] => args.into_iter().map(|(sym, ty)| {
+                let id = context.borrow_mut().ast.get_value(sym);
+                Decl{id, ty}
+            }).collect()
         ))
     }
 
     fn func_def<'i, 'a>(input: Node<'i, 'a>) -> Result<Def> {
         let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
-            [iden(name), func_args(args), ty(ret_ty), block(body)] => Def::Func{sig: FuncSig{name, args, ret_ty: ret_ty}, body},
-            [iden(name), func_args(args), block(body)] => Def::Func{sig: FuncSig{name, args, ret_ty: context.borrow_mut().tcx.get_void()}, body}
+            [iden(name_sym), func_args(args), ty(ret_ty), block(body)] => {
+                let name = context.borrow_mut().ast.get_func(name_sym);
+                Def::Func{sig: FuncSig{name, args, ret_ty}, body}
+            },
+            [iden(name_sym), func_args(args), block(body)] => {
+                let mut context = context.borrow_mut();
+                let name = context.ast.get_func(name_sym);
+                let ret_ty = context.tcx.get_void();
+                Def::Func{sig: FuncSig{name, args, ret_ty}, body}
+            }
         ))
     }
 
-    fn rec_field_defs(input: Node) -> Result<HashMap<Id, TypeId>> {
+    fn rec_field_defs(input: Node) -> Result<HashMap<FieldId, TypeId>> {
+        let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
-            [arg(arg)..] => arg.into_iter().map(|decl| (decl.id, decl.ty)).collect()
+            [arg(args)..] => args.into_iter().map(|(sym, ty)| {
+                let id = context.borrow_mut().ast.get_field(sym);
+                (id, ty)
+            }).collect()
         ))
     }
 
     fn record_def<'i, 'a>(input: Node<'i, 'a>) -> Result<Def> {
+        let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
-            [iden(name), rec_field_defs(fields)] => Def::Record{ name, fields }
+            [iden(name_sym), rec_field_defs(fields)] => {
+                let name = context.borrow_mut().ast.get_record(name_sym);
+                Def::Record{ name, fields }
+            }
         ))
     }
 
@@ -569,8 +640,12 @@ impl DahliaParser {
     }
 
     fn decls(input: Node) -> Result<Vec<Decl>> {
+        let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
-            [arg(decls)..] => decls.into_iter().collect()
+            [arg(args)..] => args.into_iter().map(|(sym, ty)| {
+                let id = context.borrow_mut().ast.get_value(sym);
+                Decl{id, ty}
+            }).collect()
         ))
     }
 
@@ -619,8 +694,16 @@ impl DahliaParser {
     fn func_signature(input: Node) -> Result<FuncSig> {
         let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
-            [iden(name), func_args(args), ty(ret_ty)] => FuncSig{name, args, ret_ty: ret_ty},
-            [iden(name), func_args(args)] => FuncSig{name, args, ret_ty: context.borrow_mut().tcx.get_void()}
+            [iden(name_sym), func_args(args), ty(ret_ty)] => {
+                let name = context.borrow_mut().ast.get_func(name_sym);
+                FuncSig{name, args, ret_ty}
+            },
+            [iden(name_sym), func_args(args)] => {
+                let mut context = context.borrow_mut();
+                let name = context.ast.get_func(name_sym);
+                let ret_ty = context.tcx.get_void();
+                FuncSig{name, args, ret_ty}
+            }
         ))
     }
 

@@ -5,12 +5,12 @@ use thiserror::Error;
 
 use crate::{
     ast::{
-        Ast, Command, CommandId, Decl, Def, Expr, ExprId, FuncSig, InfixOp, Program, Type,
+        Ast, Command, CommandId, Decl, Def, Expr, ExprId, IdResolve, InfixOp, Program, Type,
         TypeContext, TypeId,
     },
     subtyping::is_subtype,
     type_env::TypeEnv,
-    utils::{bits_needed, resolve_id},
+    utils::bits_needed,
 };
 
 #[derive(Debug, Error)]
@@ -72,8 +72,8 @@ pub fn typecheck(program: &Program, ast: &mut Ast, tcx: &mut TypeContext) -> Res
             format!(
                 "failed to type check definition `{}`",
                 match def {
-                    Def::Record { name, .. } => resolve_id(*name, ast),
-                    Def::Func { sig, .. } => resolve_id(sig.name, ast),
+                    Def::Record { name, .. } => name.resolve_id(ast),
+                    Def::Func { sig, .. } => sig.name.resolve_id(ast),
                 }
             )
         })?;
@@ -83,7 +83,7 @@ pub fn typecheck(program: &Program, ast: &mut Ast, tcx: &mut TypeContext) -> Res
         check_decl(decl, &mut env, ast, tcx).with_context(|| {
             format!(
                 "failed to type check program declaration `{}`",
-                resolve_id(decl.id, ast)
+                decl.id.resolve_id(ast)
             )
         })?;
     }
@@ -103,13 +103,13 @@ fn check_decl(decl: &Decl, env: &mut TypeEnv, ast: &Ast, tcx: &mut TypeContext) 
         .with_context(|| {
             format!(
                 "failed to type check declaration `{}` type",
-                resolve_id(decl.id, ast),
+                decl.id.resolve_id(ast),
             )
         })?;
-    tcx.id_type_map.insert(decl.id, resolved_ty);
-    env.add(decl.id, resolved_ty, tcx)
+    tcx.value_type_map.insert(decl.id, resolved_ty);
+    env.add(decl.id, resolved_ty, ast, tcx)
         .map_err(|_| TypecheckError::AlreadyBound)
-        .with_context(|| format!("`{}` already bound", resolve_id(decl.id, ast)))?;
+        .with_context(|| format!("`{}` already bound", decl.id.resolve_id(ast)))?;
     Ok(())
 }
 
@@ -127,15 +127,15 @@ fn check_def(def: &Def, env: &mut TypeEnv, ast: &Ast, tcx: &mut TypeContext) -> 
                 .with_context(|| {
                     format!(
                         "failed to type check record definition `{}` field types",
-                        resolve_id(*name, ast)
+                        name.resolve_id(ast)
                     )
                 })?;
-            env.add_type(
+            env.add_record(
                 name.clone(),
                 tcx.get_rec_type(name.clone(), resolved_fields),
             )
             .map_err(|_| TypecheckError::AlreadyBound)
-            .with_context(|| format!("record type `{}` already bound", resolve_id(*name, ast)))?;
+            .with_context(|| format!("record type `{}` already bound", name.resolve_id(ast)))?;
         }
         Def::Func { sig, body } => {
             env.with_scope(|env| -> Result<()> {
@@ -144,8 +144,8 @@ fn check_def(def: &Def, env: &mut TypeEnv, ast: &Ast, tcx: &mut TypeContext) -> 
                     check_decl(decl, env, ast, tcx).with_context(|| {
                         format!(
                             "failed to type check function `{}` argument `{}`",
-                            resolve_id(sig.name, ast),
-                            resolve_id(decl.id, ast),
+                            sig.name.resolve_id(ast),
+                            decl.id.resolve_id(ast),
                         )
                     })?;
                 }
@@ -157,7 +157,7 @@ fn check_def(def: &Def, env: &mut TypeEnv, ast: &Ast, tcx: &mut TypeContext) -> 
                     .with_context(|| {
                         format!(
                             "failed to type check function `{}` return type",
-                            resolve_id(sig.name, ast)
+                            sig.name.resolve_id(ast)
                         )
                     })?;
                 env.set_ret_type(resolved_ret_ty);
@@ -165,21 +165,20 @@ fn check_def(def: &Def, env: &mut TypeEnv, ast: &Ast, tcx: &mut TypeContext) -> 
                 check_command(*body, env, ast, tcx).with_context(|| {
                     format!(
                         "failed to type check command: function `{}` body",
-                        resolve_id(sig.name, ast)
+                        sig.name.resolve_id(ast)
                     )
                 })?;
                 Ok(())
             })?;
 
             // add function type to env
-            // should add to id map as well?
-            env.add(
+            // should use resolved args and return type?
+            env.add_func(
                 sig.name,
                 tcx.get_func(sig.args.iter().map(|decl| decl.ty).collect(), sig.ret_ty),
-                tcx,
             )
             .map_err(|_| TypecheckError::AlreadyBound)
-            .with_context(|| format!("function `{}` already bound", resolve_id(sig.name, ast)))?;
+            .with_context(|| format!("function `{}` already bound", sig.name.resolve_id(ast)))?;
         }
     }
     Ok(())
@@ -240,18 +239,19 @@ fn check_command(
 
             env.with_scope(|env| {
                 env.add(
-                    range.id,
+                    range.iter,
                     tcx.get_index(
                         (0, range.unroll),
                         (range.start / range.unroll, range.end / range.unroll),
                     ),
+                    ast,
                     tcx,
                 )
                 .map_err(|_| TypecheckError::AlreadyBound)
                 .with_context(|| {
                     format!(
                         "for range iterator `{}` already bound",
-                        resolve_id(range.id, ast)
+                        range.iter.resolve_id(ast)
                     )
                 })?;
 
@@ -304,7 +304,7 @@ fn check_command(
                                 .with_context(|| {
                                     format!(
                                         "failed to type check command: let binding `{}` missing explicit type",
-                                        resolve_id(*id, ast)
+                                        id.resolve_id(ast)
                                     )
                                 })?;
                         let resolved_ty = env
@@ -313,7 +313,7 @@ fn check_command(
                             .with_context(|| {
                                 format!(
                                     "failed to type check command: let binding `{}` type annotation",
-                                    resolve_id(*id, ast)
+                                    id.resolve_id(ast)
                                 )
                             })?;
 
@@ -330,7 +330,7 @@ fn check_command(
                                     .with_context(|| {
                                         format!(
                                             "failed to type check expression: array literal for let binding `{}`",
-                                            resolve_id(*id, ast)
+                                            id.resolve_id(ast)
                                         )
                                     })?,
                             ),
@@ -338,7 +338,7 @@ fn check_command(
                                 || {
                                     format!(
                                         "failed to type check expression: array literal for let binding `{}`",
-                                        resolve_id(*id, ast)
+                                        id.resolve_id(ast)
                                     )
                                 },
                             )?,
@@ -351,7 +351,7 @@ fn check_command(
                             .with_context(|| {
                                 format!(
                                     "failed to type check expression: array literal for let binding `{}`",
-                                    resolve_id(*id, ast)
+                                    id.resolve_id(ast)
                                 )
                             })?;
                         }
@@ -361,7 +361,7 @@ fn check_command(
                                 || {
                                     format!(
                                         "failed to type check expression: array literal for let binding `{}`",
-                                        resolve_id(*id, ast)
+                                        id.resolve_id(ast)
                                     )
                                 },
                             )?;
@@ -371,7 +371,7 @@ fn check_command(
                             let val_ty = check_expr(*val, env, ast, tcx).with_context(|| {
                                 format!(
                                     "failed to type check expression: array element for let binding `{}`",
-                                    resolve_id(*id, ast)
+                                    id.resolve_id(ast)
                                 )
                             })?;
                             if !is_subtype(val_ty, element_type, tcx) {
@@ -379,17 +379,17 @@ fn check_command(
                                     || {
                                         format!(
                                             "failed to type check expression: array element for let binding `{}`",
-                                            resolve_id(*id, ast)
+                                            id.resolve_id(ast)
                                         )
                                     },
                                 )?;
                             }
                         }
 
-                        tcx.id_type_map.insert(*id, ty);
-                        env.add(*id, resolved_ty, tcx)
+                        tcx.value_type_map.insert(*id, ty);
+                        env.add(*id, resolved_ty, ast, tcx)
                             .map_err(|_| TypecheckError::AlreadyBound)
-                            .with_context(|| format!("`{}` already bound", resolve_id(*id, ast)))?;
+                            .with_context(|| format!("`{}` already bound", id.resolve_id(ast)))?;
                     }
 
                     Expr::RecordLiteral(fields) => {
@@ -398,7 +398,7 @@ fn check_command(
                                 .with_context(|| {
                                     format!(
                                         "failed to type check command: let binding `{}` missing explicit type",
-                                        resolve_id(*id, ast)
+                                        id.resolve_id(ast)
                                     )
                                 })?;
                         let resolved_ty = env
@@ -407,7 +407,7 @@ fn check_command(
                             .with_context(|| {
                                 format!(
                                     "failed to type check command: let binding `{}` type annotation",
-                                    resolve_id(*id, ast)
+                                    id.resolve_id(ast)
                                 )
                             })?;
 
@@ -416,8 +416,8 @@ fn check_command(
                             let field_ty = check_expr(*expr, env, ast, tcx).with_context(|| {
                                 format!(
                                     "failed to type check expression: record field `{}` for let binding `{}`",
-                                    resolve_id(*field_id, ast),
-                                    resolve_id(*id, ast)
+                                    field_id.resolve_id(ast),
+                                    id.resolve_id(ast)
                                 )
                             })?;
                             actual_types.insert(*field_id, field_ty);
@@ -429,7 +429,7 @@ fn check_command(
                                 || {
                                     format!(
                                         "failed to type check expression: record literal for let binding `{}`",
-                                        resolve_id(*id, ast)
+                                        id.resolve_id(ast)
                                     )
                                 },
                             )?,
@@ -442,8 +442,8 @@ fn check_command(
                                 .with_context(|| {
                                     format!(
                                         "failed to type check expression: record literal missing field `{}` for let binding `{}`",
-                                        resolve_id(*expected_id, ast),
-                                        resolve_id(*id, ast),
+                                        expected_id.resolve_id(ast),
+                                        id.resolve_id(ast),
                                     )
                                 })?;
 
@@ -452,8 +452,8 @@ fn check_command(
                                     || {
                                         format!(
                                             "failed to type check expression: record field `{}` for let binding `{}`",
-                                            resolve_id(*expected_id, ast),
-                                            resolve_id(*id, ast)
+                                            expected_id.resolve_id(ast),
+                                            id.resolve_id(ast)
                                         )
                                     },
                                 )?;
@@ -464,14 +464,14 @@ fn check_command(
                             Err(anyhow!(TypecheckError::ExtraFields)).with_context(|| {
                                 format!(
                                     "failed to type check expression: record literal for let binding `{}`",
-                                    resolve_id(*id, ast)
+                                    id.resolve_id(ast)
                                 )
                             })?;
                         }
 
-                        env.add(*id, resolved_ty, tcx)
+                        env.add(*id, resolved_ty, ast, tcx)
                             .map_err(|_| TypecheckError::AlreadyBound)
-                            .with_context(|| format!("`{}` already bound", resolve_id(*id, ast)))?;
+                            .with_context(|| format!("`{}` already bound", id.resolve_id(ast)))?;
                     }
                     _ => {
                         let resolved_ty = ty
@@ -483,14 +483,14 @@ fn check_command(
                             .with_context(|| {
                                 format!(
                                     "failed to type check command: let binding `{}` type annotation",
-                                    resolve_id(*id, ast)
+                                    id.resolve_id(ast)
                                 )
                             })?;
 
                         let val_ty = check_expr(*value, env, ast, tcx).with_context(|| {
                             format!(
                                 "failed to type check expression: value for let binding `{}`",
-                                resolve_id(*id, ast)
+                                id.resolve_id(ast)
                             )
                         })?;
 
@@ -506,15 +506,15 @@ fn check_command(
                                     || {
                                         format!(
                                             "failed to type check expression: value for let binding `{}`",
-                                            resolve_id(*id, ast)
+                                            id.resolve_id(ast)
                                         )
                                     },
                                 )?;
                             }
-                            env.add(*id, resolved_ty, tcx)
+                            env.add(*id, resolved_ty, ast, tcx)
                                 .map_err(|_| TypecheckError::AlreadyBound)
                                 .with_context(|| {
-                                    format!("`{}` already bound", resolve_id(*id, ast))
+                                    format!("`{}` already bound", id.resolve_id(ast))
                                 })?;
                         } else {
                             let typ = match &tcx.types[val_ty] {
@@ -523,10 +523,10 @@ fn check_command(
                                 _ => val_ty,
                             };
 
-                            env.add(*id, typ, tcx)
+                            env.add(*id, typ, ast, tcx)
                                 .map_err(|_| TypecheckError::AlreadyBound)
                                 .with_context(|| {
-                                    format!("`{}` already bound", resolve_id(*id, ast))
+                                    format!("`{}` already bound", id.resolve_id(ast))
                                 })?;
                         }
                     }
@@ -537,7 +537,7 @@ fn check_command(
                     .with_context(|| {
                         format!(
                             "failed to type check command: let binding `{}` missing explicit type",
-                            resolve_id(*id, ast)
+                            id.resolve_id(ast)
                         )
                     })?;
                 let resolved_ty = env
@@ -546,12 +546,12 @@ fn check_command(
                     .with_context(|| {
                         format!(
                             "failed to type check command: let binding `{}` type annotation",
-                            resolve_id(*id, ast)
+                            id.resolve_id(ast)
                         )
                     })?;
-                env.add(*id, resolved_ty, tcx)
+                env.add(*id, resolved_ty, ast, tcx)
                     .map_err(|_| TypecheckError::AlreadyBound)
-                    .with_context(|| format!("`{}` already bound", resolve_id(*id, ast)))?;
+                    .with_context(|| format!("`{}` already bound", id.resolve_id(ast)))?;
             }
 
             Ok(())
@@ -581,10 +581,10 @@ fn check_expr_(
         }
         Expr::Id(id) => {
             let ty = env
-                .get(id)
+                .get(id, ast)
                 .ok_or(TypecheckError::Unbound)
-                .with_context(|| format!("`{}` unbound", resolve_id(*id, ast)))?;
-            tcx.id_type_map.insert(*id, ty);
+                .with_context(|| format!("`{}` unbound", id.resolve_id(ast)))?;
+            tcx.value_type_map.insert(*id, ty);
             Ok(ty)
         }
         Expr::BinOp { left, op, right } => {
@@ -597,12 +597,12 @@ fn check_expr_(
         }
         Expr::Application { func, args } => {
             let func_ty = env
-                .get(func)
+                .get_func(func)
                 .ok_or(TypecheckError::Unbound)
                 .with_context(|| {
                     format!(
                         "failed to type check expression: function application `{}`",
-                        resolve_id(*func, ast)
+                        func.resolve_id(ast)
                     )
                 })?;
 
@@ -658,18 +658,18 @@ fn check_expr_(
                 .with_context(|| {
                     format!(
                         "failed to type check expression: record field `{}`",
-                        resolve_id(*field, ast)
+                        field.resolve_id(ast)
                     )
                 })
         }
         Expr::ArrayAccess { array, indices } => {
             let (element_ty, dims_len) = match &tcx.types[env
-                .get(array)
+                .get(array, ast)
                 .ok_or(TypecheckError::Unbound)
                 .with_context(|| {
                     format!(
                         "failed to type check expression: array access `{}`",
-                        resolve_id(*array, ast)
+                        array.resolve_id(ast)
                     )
                 })?] {
                 Type::Array {
@@ -678,7 +678,7 @@ fn check_expr_(
                 _ => Err(anyhow!(TypecheckError::UnexpectedType)).with_context(|| {
                     format!(
                         "failed to type check expression: array access `{}`",
-                        resolve_id(*array, ast)
+                        array.resolve_id(ast)
                     )
                 })?,
             };
@@ -687,7 +687,7 @@ fn check_expr_(
                 Err(anyhow!(TypecheckError::IncorrectAccessDims)).with_context(|| {
                     format!(
                         "failed to type check expression: array access `{}` indices",
-                        resolve_id(*array, ast)
+                        array.resolve_id(ast)
                     )
                 })?;
             }
@@ -707,11 +707,11 @@ fn check_expr_(
                 .with_context(|| {
                     format!(
                         "failed to type check expression: array access `{}` indices",
-                        resolve_id(*array, ast)
+                        array.resolve_id(ast)
                     )
                 })?;
 
-            tcx.id_type_map.insert(*array, element_ty);
+            tcx.value_type_map.insert(*array, element_ty);
             Ok(element_ty)
         }
     }
