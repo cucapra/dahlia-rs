@@ -5,6 +5,13 @@ use crate::{
     utils::bits_needed,
 };
 
+fn is_equal(tid1: &TypeId, tid2: &TypeId, tcx: &TypeContext) -> bool {
+    match (&tcx.types[*tid1], &tcx.types[*tid2]) {
+        (Type::Index { .. }, Type::Index { .. }) => true,
+        _ => tid1 == tid2,
+    }
+}
+
 pub fn is_subtype(tid1: TypeId, tid2: TypeId, tcx: &TypeContext) -> bool {
     let t1 = tcx.types.get(tid1).expect("Type ID not found in context");
     let t2 = tcx.types.get(tid2).expect("Type ID not found in context");
@@ -40,7 +47,7 @@ pub fn is_subtype(tid1: TypeId, tid2: TypeId, tcx: &TypeContext) -> bool {
                 dims: sup_dims,
                 ports: p2,
             },
-        ) => tsup == tsub && sub_dims == sup_dims && p1 == p2,
+        ) => is_equal(tsup, tsub, tcx) && sub_dims == sup_dims && p1 == p2,
         (Type::Float, Type::Double) => true,
         (Type::Rational(_), Type::Float | Type::Double) => true,
         (
@@ -66,7 +73,7 @@ pub fn is_subtype(tid1: TypeId, tid2: TypeId, tcx: &TypeContext) -> bool {
                 unsigned: un2,
             },
         ) => un1 == un2 && i1 <= i2 && t1 - i1 <= t2 - i2,
-        _ => tid1 == tid2, // can directly compare TypeIds as they are interned
+        _ => is_equal(&tid1, &tid2, tcx),
     }
 }
 
@@ -235,6 +242,6 @@ pub fn safe_cast(tid_from: TypeId, tid_to: TypeId, tcx: &TypeContext) -> bool {
                 ..
             },
         ) => un1 == un2 && i1 <= i2,
-        _ => tid_from == tid_to, // can directly compare TypeIds as they are interned
+        _ => is_equal(&tid_from, &tid_to, tcx),
     }
 }

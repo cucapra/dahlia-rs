@@ -113,8 +113,8 @@ impl DahliaParser {
 
     fn ty_idx(input: Node) -> Result<DimSpec> {
         Ok(match_nodes!(input.into_children();
-            [number(length)] => DimSpec{length, bank: None},
-            [number(length), number(bank)] => DimSpec{length, bank: Some(bank)}
+            [number(length)] => DimSpec{length, bank: 1},
+            [number(length), number(bank)] => DimSpec{length, bank}
         ))
     }
 

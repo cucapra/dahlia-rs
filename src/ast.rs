@@ -359,10 +359,10 @@ impl TypeContext {
     }
 }
 
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
 pub struct DimSpec {
     pub length: usize,
-    pub bank: Option<usize>,
+    pub bank: usize,
 }
 
 #[derive(Debug, Clone)]

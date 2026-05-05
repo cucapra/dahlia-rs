@@ -418,7 +418,7 @@ fn debug_type(context: &Context, ty: &Type) -> Value {
 fn debug_dim_spec(dim: &DimSpec) -> Value {
     json!({
         "len": dim.length,
-        "bank": dim.bank.unwrap_or(1),
+        "bank": dim.bank,
     })
 }
 

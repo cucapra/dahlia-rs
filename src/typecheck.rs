@@ -5,8 +5,8 @@ use thiserror::Error;
 
 use crate::{
     ast::{
-        Ast, Command, CommandId, Decl, Def, Expr, ExprId, IdResolve, InfixOp, Program, Type,
-        TypeContext, TypeId,
+        Ast, Command, CommandId, Decl, Def, DimSpec, Expr, ExprId, IdResolve, InfixOp, Program,
+        Suffix, Type, TypeContext, TypeId, View,
     },
     subtyping::{is_subtype, join_of},
     type_env::TypeEnv,
@@ -168,17 +168,29 @@ fn check_def(def: &Def, env: &mut TypeEnv, ast: &Ast, tcx: &mut TypeContext) -> 
                         sig.name.resolve_id(ast)
                     )
                 })?;
+
+                let resolved_arg_types = sig
+                    .args
+                    .iter()
+                    .map(|decl| {
+                        env.resolve_type(decl.ty, tcx)
+                            .map_err(|_| anyhow!(TypecheckError::UnknownAlias))
+                    })
+                    .collect::<Result<Vec<_>>>()
+                    .with_context(|| {
+                        format!(
+                            "failed to type check command: function `{}` arg types resolution",
+                            sig.name.resolve_id(ast),
+                        )
+                    })?;
+
+                env.add_func(sig.name, tcx.get_func(resolved_arg_types, resolved_ret_ty))
+                    .map_err(|_| TypecheckError::AlreadyBound)
+                    .with_context(|| {
+                        format!("function `{}` already bound", sig.name.resolve_id(ast))
+                    })?;
                 Ok(())
             })?;
-
-            // add function type to env
-            // should use resolved args and return type?
-            env.add_func(
-                sig.name,
-                tcx.get_func(sig.args.iter().map(|decl| decl.ty).collect(), sig.ret_ty),
-            )
-            .map_err(|_| TypecheckError::AlreadyBound)
-            .with_context(|| format!("function `{}` already bound", sig.name.resolve_id(ast)))?;
         }
     }
     Ok(())
@@ -574,8 +586,143 @@ fn check_command(
             }
             Ok(())
         }
-        Command::View { id, arr_id, dims } => todo!(),
-        Command::Split { id, arr_id, dims } => todo!(),
+        Command::View {
+            id,
+            arr_id,
+            dims: view_dims,
+        } => {
+            let arr_ty = env
+                .get(arr_id, ast)
+                .ok_or(TypecheckError::Unbound)
+                .with_context(|| {
+                    format!(
+                        "failed to type check command: view `{}`",
+                        id.resolve_id(ast)
+                    )
+                })?;
+
+            let (element_ty, arr_dims_len, ports) = match &tcx.types[arr_ty] {
+                Type::Array {
+                    element_type,
+                    dims,
+                    ports,
+                    ..
+                } => (*element_type, dims.len(), *ports),
+                _ => Err(anyhow!(TypecheckError::UnexpectedType)).with_context(|| {
+                    format!(
+                        "failed to type check command: view `{}`",
+                        id.resolve_id(ast)
+                    )
+                })?,
+            };
+
+            if arr_dims_len != view_dims.len() {
+                Err(anyhow!(TypecheckError::IncorrectAccessDims)).with_context(|| {
+                    format!(
+                        "failed to type check command: view `{}`",
+                        id.resolve_id(ast)
+                    )
+                })?;
+            }
+
+            let mut new_dims = Vec::new();
+            for i in 0..view_dims.len() {
+                let arr_dim = match &tcx.types[arr_ty] {
+                    Type::Array { dims, .. } => dims[i].clone(),
+                    _ => unreachable!(),
+                };
+                new_dims.push(
+                    check_view(&view_dims[i], &arr_dim, env, ast, tcx).with_context(|| {
+                        format!(
+                            "failed to type check command: view `{}` dimension {}",
+                            id.resolve_id(ast),
+                            i
+                        )
+                    })?,
+                );
+            }
+
+            let new_ty = tcx.get_array(element_ty, new_dims, ports);
+
+            tcx.value_type_map.insert(*id, new_ty);
+            tcx.value_type_map.insert(*arr_id, arr_ty);
+
+            env.add(*id, new_ty, ast, tcx)
+                .map_err(|_| TypecheckError::AlreadyBound)
+                .with_context(|| format!("`{}` already bound", id.resolve_id(ast)))?;
+
+            Ok(())
+        }
+        Command::Split { id, arr_id, dims } => {
+            let arr_ty = env
+                .get(arr_id, ast)
+                .ok_or(TypecheckError::Unbound)
+                .with_context(|| {
+                    format!(
+                        "failed to type check command: split `{}`",
+                        id.resolve_id(ast)
+                    )
+                })?;
+
+            let (element_ty, arr_dims, ports) = match &tcx.types[arr_ty] {
+                Type::Array {
+                    element_type,
+                    dims,
+                    ports,
+                    ..
+                } => (*element_type, dims, *ports),
+                _ => Err(anyhow!(TypecheckError::UnexpectedType)).with_context(|| {
+                    format!(
+                        "failed to type check command: split `{}`",
+                        id.resolve_id(ast)
+                    )
+                })?,
+            };
+
+            if arr_dims.len() != dims.len() {
+                Err(anyhow!(TypecheckError::IncorrectAccessDims)).with_context(|| {
+                    format!(
+                        "failed to type check command: split `{}`",
+                        id.resolve_id(ast)
+                    )
+                })?;
+            }
+
+            let split_dims = dims
+                .iter()
+                .zip(arr_dims.iter())
+                .try_fold(
+                    Vec::new(),
+                    |mut acc, (&split_dim, DimSpec { length, bank })| {
+                        if split_dim == 0 || bank % split_dim != 0 {
+                            return Err(anyhow!(TypecheckError::InvalidSplitFactor));
+                        }
+                        acc.push(DimSpec {
+                            length: split_dim,
+                            bank: split_dim,
+                        });
+                        acc.push(DimSpec {
+                            length: length / split_dim,
+                            bank: bank / split_dim,
+                        });
+                        Ok(acc)
+                    },
+                )
+                .with_context(|| {
+                    format!("failed to type check command: split {}", id.resolve_id(ast))
+                })?;
+
+            let view_ty = tcx.get_array(element_ty, split_dims, ports);
+
+            tcx.value_type_map.insert(*id, view_ty);
+            tcx.value_type_map.insert(*arr_id, arr_ty);
+
+            env.add(*id, view_ty, ast, tcx)
+                .map_err(|_| TypecheckError::AlreadyBound)
+                .with_context(|| format!("`{}` already bound", id.resolve_id(ast)))?;
+
+            Ok(())
+        }
     }
 }
 
@@ -625,6 +772,7 @@ fn check_expr_(
                     )
                 })?;
 
+            // can probably remove this since get_func should guarantee to return a function type
             let (arg_types, ret) = match &tcx.types[func_ty] {
                 Type::Func {
                     args: arg_types,
@@ -811,4 +959,50 @@ fn check_binop(tid1: TypeId, tid2: TypeId, op: InfixOp, tcx: &mut TypeContext) -
             }
         }
     }
+}
+
+fn check_view(
+    view: &View,
+    arr_dim: &DimSpec,
+    env: &mut TypeEnv,
+    ast: &Ast,
+    tcx: &mut TypeContext,
+) -> Result<DimSpec> {
+    if let Some(shrink) = view.shrink {
+        if shrink > arr_dim.bank || arr_dim.bank % shrink != 0 {
+            return Err(anyhow!(TypecheckError::InvalidShrinkWidth))
+                .context("failed to type check view: invalid shrink width");
+        }
+    }
+
+    let new_bank = view.shrink.unwrap_or(arr_dim.bank);
+
+    let idx = match view.suffix {
+        Suffix::Aligned { factor, e } => {
+            if new_bank > factor {
+                return Err(anyhow!(TypecheckError::InvalidAlignFactor))
+                    .context("failed to type check view: invalid align factor");
+            }
+            if factor % new_bank != 0 {
+                return Err(anyhow!(TypecheckError::InvalidAlignFactor))
+                    .context("failed to type check view: invalid align factor");
+            }
+            e
+        }
+        Suffix::Rotation(idx) => idx,
+    };
+
+    let typ = check_expr(idx, env, ast, tcx)?;
+    if !matches!(
+        &tcx.types[typ],
+        Type::StaticInt(..) | Type::Bit { .. } | Type::Index { .. }
+    ) {
+        return Err(anyhow!(TypecheckError::UnexpectedType))
+            .context("failed to type check view: index expression must be integer");
+    }
+
+    Ok(DimSpec {
+        length: view.prefix.unwrap_or(arr_dim.length),
+        bank: new_bank,
+    })
 }
