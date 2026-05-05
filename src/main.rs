@@ -3,7 +3,7 @@ use std::cell::RefCell;
 use dahlia_rs::{ast::Context, ast_debug::ast_debug, parser::parse_dahlia, typecheck::typecheck};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let source = r###"
+    /* let source = r###"
 import futil("primitives/math.futil") { def sqrt(in: ubit<32>): ubit<32>; }
 
 def foo(a: ubit<32>): ubit<32> = {
@@ -15,6 +15,7 @@ let b: ubit<32> = (1 as ubit<32>);
 let c: ubit<32> = foo(b);
 let d: ubit<32> = sqrt(c);
     "###;
+    */
     let source = r###"
     record point {
   x: bit<32>;

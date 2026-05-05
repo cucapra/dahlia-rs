@@ -8,7 +8,7 @@ use crate::{
         Ast, Command, CommandId, Decl, Def, Expr, ExprId, IdResolve, InfixOp, Program, Type,
         TypeContext, TypeId,
     },
-    subtyping::is_subtype,
+    subtyping::{is_subtype, join_of},
     type_env::TypeEnv,
     utils::bits_needed,
 };
@@ -556,7 +556,26 @@ fn check_command(
 
             Ok(())
         }
-        _ => todo!(),
+        Command::Decorate(..) => Ok(()),
+        Command::Expr(expr) => {
+            check_expr(*expr, env, ast, tcx)
+                .context("failed to type check command: expression statement")?;
+            Ok(())
+        }
+        Command::Return(expr) => {
+            let ret_ty = env
+                .get_ret_type()
+                .expect("Return type not set in type environment");
+            let expr_ty = check_expr(*expr, env, ast, tcx)
+                .context("failed to type check command: return expression")?;
+            if !is_subtype(expr_ty, ret_ty, tcx) {
+                Err(anyhow!(TypecheckError::UnexpectedType))
+                    .context("failed to type check command: return expression type mismatch")?;
+            }
+            Ok(())
+        }
+        Command::View { id, arr_id, dims } => todo!(),
+        Command::Split { id, arr_id, dims } => todo!(),
     }
 }
 
@@ -592,7 +611,7 @@ fn check_expr_(
                 .context("failed to type check expression: binary operator LHS")?;
             let t2 = check_expr(*right, env, ast, tcx)
                 .context("failed to type check expression: binary operator RHS")?;
-            Ok(check_binop(t1, t2, op.clone(), ast, tcx)
+            Ok(check_binop(t1, t2, op.clone(), tcx)
                 .context("failed to type check binary operation")?)
         }
         Expr::Application { func, args } => {
@@ -726,12 +745,70 @@ fn check_expr(expr: ExprId, env: &mut TypeEnv, ast: &Ast, tcx: &mut TypeContext)
     Ok(ty)
 }
 
-fn check_binop(
-    tid1: TypeId,
-    tid2: TypeId,
-    op: InfixOp,
-    ast: &Ast,
-    tcx: &mut TypeContext,
-) -> Result<TypeId> {
-    todo!()
+fn check_binop(tid1: TypeId, tid2: TypeId, op: InfixOp, tcx: &mut TypeContext) -> Result<TypeId> {
+    match op {
+        InfixOp::Eq | InfixOp::Neq => {
+            if let Type::Array { .. } = tcx.types[tid1] {
+                return Err(anyhow!(TypecheckError::BinopError)).context(
+                    "failed to type check binary operation: equality operator does not support arrays");
+            }
+            if join_of(tid1, tid2, op, tcx).is_none() {
+                return Err(anyhow!(TypecheckError::NoJoin)).context(
+                    "failed to type check binary operation: no common supertype for operands",
+                );
+            }
+            Ok(tcx.get_bool())
+        }
+        InfixOp::And | InfixOp::Or => {
+            if tid1 != tcx.get_bool() || tid2 != tcx.get_bool() {
+                return Err(anyhow!(TypecheckError::BinopError)).context(
+                    "failed to type check binary operation: both operands of bool operation must be bool",
+                );
+            }
+            Ok(tcx.get_bool())
+        }
+        InfixOp::Mul | InfixOp::Div | InfixOp::Mod | InfixOp::Add | InfixOp::Sub => {
+            join_of(tid1, tid2, op, tcx)
+                .ok_or(anyhow!(TypecheckError::NoJoin))
+                .context("failed to type check binary operation: no common supertype for operands")
+        }
+        InfixOp::Shl | InfixOp::Shr | InfixOp::Band | InfixOp::Bor | InfixOp::Bxor => {
+            match (&tcx.types[tid1], &tcx.types[tid2]) {
+                (
+                    Type::Bit { length, unsigned },
+                    Type::StaticInt(..) | Type::Bit { .. } | Type::Index { .. },
+                ) => Ok(tcx.get_bit(*length, *unsigned)),
+                (
+                    Type::StaticInt(v),
+                    Type::StaticInt(..) | Type::Bit { .. } | Type::Index { .. },
+                ) => Ok(tcx.get_bit(bits_needed(*v), false)),
+                (
+                    Type::Index { static_, dynamic },
+                    Type::StaticInt(..) | Type::Bit { .. } | Type::Index { .. },
+                ) => {
+                    let max_val = static_.1 * dynamic.1 - 1;
+                    Ok(tcx.get_bit(bits_needed(max_val), false))
+                }
+                _ => Err(anyhow!(TypecheckError::BinopError)).context(
+                    "failed to type check binary operation: invalid operand types for bitwise operation",
+                ),
+            }
+        }
+        InfixOp::Lt | InfixOp::Le | InfixOp::Gt | InfixOp::Ge => {
+            match (&tcx.types[tid1], &tcx.types[tid2]) {
+                (Type::StaticInt(..)|Type::Bit { .. }|Type::Index { .. },
+                Type::StaticInt(..)|Type::Bit { .. }|Type::Index { .. }) => Ok(tcx.get_bool()),
+                (Type::Float, Type::Float)
+                | (Type::Double, Type::Double) => Ok(tcx.get_bool()),
+                (
+                    Type::Rational(..) | Type::Double | Type::Float | Type::Fixed { .. },
+                    Type::Rational(..),
+                ) => Ok(tcx.get_bool()),
+                (Type::Fixed { .. }, Type::Fixed { .. }) if tid1 == tid2 => Ok(tcx.get_bool()),
+                _ => Err(anyhow!(TypecheckError::BinopError)).context(
+                    "failed to type check binary operation: invalid operand types for comparison operation",
+                ),
+            }
+        }
+    }
 }
