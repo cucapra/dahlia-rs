@@ -4,7 +4,7 @@ use dahlia_rs::ast::Context;
 use dahlia_rs::parser::parse_dahlia;
 
 fn parse_ok(input: &str) {
-    let context = RefCell::new(Context::default());
+    let context = RefCell::new(Context::new());
     assert!(
         parse_dahlia(input, &context).is_ok(),
         "Failed to parse:\n{}",

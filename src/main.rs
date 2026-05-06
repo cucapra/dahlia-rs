@@ -51,10 +51,10 @@ record point { x: ubit<32> }
 let a: point = {x=10};
 let b: point = (a as point);
     "###;
-    let context = RefCell::new(Context::default());
+    let context = RefCell::new(Context::new());
     let program = parse_dahlia(source, &context)?;
 
-    let mut context = context.take();
+    let mut context = context.into_inner();
 
     typecheck(&program, &mut context)?;
     ast_debug(&context, &program);

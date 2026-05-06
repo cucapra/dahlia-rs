@@ -477,7 +477,7 @@ impl DahliaParser {
         let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
             [expr(cond), block(then), else_block(else_)] => {
-                let else_ = else_.unwrap_or_else(|| context.borrow_mut().ast.commands.push(Command::Empty));
+                let else_ = else_.unwrap_or_else(|| context.borrow().ast.empty_command());
                 context.borrow_mut().ast.commands.push(Command::IfElse{cond, then:unwrap_block(then), else_})
             }
         ))
@@ -539,7 +539,7 @@ impl DahliaParser {
         let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
             [block(cmd)] => unwrap_block(cmd),
-            [] => context.borrow_mut().ast.commands.push(Command::Empty)
+            [] => context.borrow().ast.empty_command()
         ))
     }
 
@@ -671,7 +671,7 @@ impl DahliaParser {
         let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
             [cmd(cmd)] => cmd,
-            [] => context.borrow_mut().ast.commands.push(Command::Empty)
+            [] => context.borrow().ast.empty_command()
         ))
     }
 
@@ -731,7 +731,7 @@ impl DahliaParser {
         let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
             [backend_opt(backends).., func_signatures(sigs)] => Include{ backends: backends.into_iter().collect(),
-            defs: sigs.into_iter().map(|s| Def::Func { sig: s, body: context.borrow_mut().ast.commands.push(Command::Empty) }).collect() }
+            defs: sigs.into_iter().map(|s| Def::Func { sig: s, body: context.borrow().ast.empty_command() }).collect() }
         ))
     }
 

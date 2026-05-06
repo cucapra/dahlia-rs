@@ -8,9 +8,9 @@ use dahlia_rs::{
 };
 
 fn parse_and_typecheck(input: &str) -> Result<(), Error> {
-    let context = RefCell::new(Context::default());
+    let context = RefCell::new(Context::new());
     let program = parse_dahlia(input, &context).expect("program should parse");
-    let mut context = context.take();
+    let mut context = context.into_inner();
     typecheck(&program, &mut context)
 }
 
@@ -35,7 +35,7 @@ fn typecheck_err(input: &str, expected: TypecheckError) {
 }
 
 fn parse_err(input: &str) {
-    let context = RefCell::new(Context::default());
+    let context = RefCell::new(Context::new());
     assert!(parse_dahlia(input, &context).is_err());
 }
 

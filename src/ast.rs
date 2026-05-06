@@ -71,13 +71,15 @@ impl IdResolve for FieldId {
 pub struct TypeId(u32);
 entity_impl!(TypeId, "typ");
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Ast {
     pub exprs: PrimaryMap<ExprId, Expr>,
     pub expr_lists: ListPool<ExprId>,
 
     pub commands: PrimaryMap<CommandId, Command>,
     pub command_lists: ListPool<CommandId>,
+
+    empty_command: CommandId,
 
     pub symbols: PrimaryMap<Symbol, String>,
     symbol_lookup: HashMap<String, Symbol>,
@@ -95,6 +97,31 @@ pub struct Ast {
 }
 
 impl Ast {
+    pub fn new() -> Self {
+        let mut commands = PrimaryMap::new();
+        let empty_command = commands.push(Command::Empty);
+        Self {
+            exprs: PrimaryMap::new(),
+            expr_lists: ListPool::new(),
+            commands,
+            command_lists: ListPool::new(),
+            empty_command,
+            symbols: PrimaryMap::new(),
+            symbol_lookup: HashMap::new(),
+            funcs: PrimaryMap::new(),
+            func_lookup: HashMap::new(),
+            values: PrimaryMap::new(),
+            records: PrimaryMap::new(),
+            record_lookup: HashMap::new(),
+            fields: PrimaryMap::new(),
+            field_lookup: HashMap::new(),
+        }
+    }
+
+    pub fn empty_command(&self) -> CommandId {
+        self.empty_command
+    }
+
     pub fn get_symbol(&mut self, name: &str) -> Symbol {
         if let Some(&sym) = self.symbol_lookup.get(name) {
             sym
@@ -152,10 +179,19 @@ pub struct TypeContext {
     pub value_type_map: HashMap<ValueId, TypeId>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Context {
     pub ast: Ast,
     pub tcx: TypeContext,
+}
+
+impl Context {
+    pub fn new() -> Self {
+        Self {
+            ast: Ast::new(),
+            tcx: TypeContext::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -569,7 +605,7 @@ impl Command {
         }
 
         if flat.is_empty() {
-            context.borrow_mut().ast.commands.push(Command::Empty)
+            context.borrow().ast.empty_command()
         } else if flat.len() == 1 {
             flat.remove(0)
         } else {
@@ -592,7 +628,7 @@ impl Command {
         }
 
         if flat.is_empty() {
-            context.borrow_mut().ast.commands.push(Command::Empty)
+            context.borrow().ast.empty_command()
         } else if flat.len() == 1 {
             flat.remove(0)
         } else {
