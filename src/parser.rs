@@ -36,6 +36,13 @@ lazy_static::lazy_static! {
 #[grammar = "dahlia.pest"]
 pub struct DahliaParser;
 
+fn unwrap_block(cmd: Command) -> CommandId {
+    match cmd {
+        Command::Block(cmd) => cmd,
+        _ => panic!("Expected block command"),
+    }
+}
+
 #[pest_consume::parser]
 impl DahliaParser {
     fn EOI(_input: Node) -> Result<()> {
@@ -453,15 +460,15 @@ impl DahliaParser {
         )
     }
 
-    fn block<'i, 'a>(input: Node<'i, 'a>) -> Result<CommandId> {
+    fn block<'i, 'a>(input: Node<'i, 'a>) -> Result<Command> {
         Ok(match_nodes!(input.into_children();
-            [cmd(c)] => c,
+            [cmd(c)] => Command::Block(c),
         ))
     }
 
     fn else_block<'i, 'a>(input: Node<'i, 'a>) -> Result<Option<CommandId>> {
         Ok(match_nodes!(input.into_children();
-            [block(cmd)] => Some(cmd),
+            [block(cmd)] => Some(unwrap_block(cmd)),
             [] => None
         ))
     }
@@ -471,7 +478,7 @@ impl DahliaParser {
         Ok(match_nodes!(input.into_children();
             [expr(cond), block(then), else_block(else_)] => {
                 let else_ = else_.unwrap_or_else(|| context.borrow_mut().ast.commands.push(Command::Empty));
-                context.borrow_mut().ast.commands.push(Command::IfElse{cond, then, else_})
+                context.borrow_mut().ast.commands.push(Command::IfElse{cond, then:unwrap_block(then), else_})
             }
         ))
     }
@@ -501,8 +508,8 @@ impl DahliaParser {
     fn while_loop<'i, 'a>(input: Node<'i, 'a>) -> Result<CommandId> {
         let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
-            [expr(cond), block(body)] => context.borrow_mut().ast.commands.push(Command::While{cond, pipeline:false, body}),
-            [expr(cond), pipeline(_), block(body)] => context.borrow_mut().ast.commands.push(Command::While{cond, pipeline:true, body})
+            [expr(cond), block(body)] => context.borrow_mut().ast.commands.push(Command::While{cond, pipeline:false, body:unwrap_block(body)}),
+            [expr(cond), pipeline(_), block(body)] => context.borrow_mut().ast.commands.push(Command::While{cond, pipeline:true, body:unwrap_block(body)}),
         ))
     }
 
@@ -531,7 +538,7 @@ impl DahliaParser {
     fn combine_block<'i, 'a>(input: Node<'i, 'a>) -> Result<CommandId> {
         let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
-            [block(cmd)] => cmd,
+            [block(cmd)] => unwrap_block(cmd),
             [] => context.borrow_mut().ast.commands.push(Command::Empty)
         ))
     }
@@ -556,7 +563,7 @@ impl DahliaParser {
     fn for_loop<'i, 'a>(input: Node<'i, 'a>) -> Result<CommandId> {
         let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
-            [for_range(range), pipeline(pipeline), block(body), combine_block(combine)] => context.borrow_mut().ast.commands.push(Command::For{range, pipeline, body, combine}),
+            [for_range(range), pipeline(pipeline), block(body), combine_block(combine)] => context.borrow_mut().ast.commands.push(Command::For{range, pipeline, body:unwrap_block(body), combine}),
         ))
     }
 
@@ -595,13 +602,13 @@ impl DahliaParser {
         Ok(match_nodes!(input.into_children();
             [iden(name_sym), func_args(args), ty(ret_ty), block(body)] => {
                 let name = context.borrow_mut().ast.get_func(name_sym);
-                Def::Func{sig: FuncSig{name, args, ret_ty}, body}
+                Def::Func{sig: FuncSig{name, args, ret_ty}, body: unwrap_block(body)}
             },
             [iden(name_sym), func_args(args), block(body)] => {
                 let mut context = context.borrow_mut();
                 let name = context.ast.get_func(name_sym);
                 let ret_ty = context.tcx.get_void();
-                Def::Func{sig: FuncSig{name, args, ret_ty}, body}
+                Def::Func{sig: FuncSig{name, args, ret_ty}, body: unwrap_block(body)}
             }
         ))
     }
@@ -650,8 +657,9 @@ impl DahliaParser {
     }
 
     fn block_cmd<'i, 'a>(input: Node<'i, 'a>) -> Result<CommandId> {
+        let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
-            [block(c)] => c,
+            [block(c)] => context.borrow_mut().ast.commands.push(c),
             [if_else(c)] => c,
             [while_loop(c)] => c,
             [for_loop(c)] => c,

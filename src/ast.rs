@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::{cell::RefCell, hash::Hash};
 
-use cranelift_entity::{EntityList, ListPool, PrimaryMap, SecondaryMap, entity_impl};
+use cranelift_entity::{EntityList, ListPool, PrimaryMap, entity_impl};
 
 #[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord, Default)]
 pub struct ExprId(u32);
@@ -146,7 +146,7 @@ pub struct TypeContext {
     pub type_lists: ListPool<TypeId>,
     pub type_map: HashMap<TypeKey, TypeId>,
 
-    pub expr_type_map: SecondaryMap<ExprId, TypeId>,
+    pub expr_type_map: HashMap<ExprId, TypeId>,
 
     pub func_type_map: HashMap<FuncId, TypeId>,
     pub value_type_map: HashMap<ValueId, TypeId>,
@@ -449,6 +449,7 @@ pub struct ForRange {
 #[derive(Debug)]
 pub enum Command {
     Empty,
+    Block(CommandId),
     Par(Vec<CommandId>),
     Seq(Vec<CommandId>),
     Let {

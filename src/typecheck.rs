@@ -13,7 +13,7 @@ use crate::{
     utils::bits_needed,
 };
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, PartialEq, Eq)]
 pub enum TypecheckError {
     #[error("Unexpected type")]
     UnexpectedType,
@@ -57,7 +57,9 @@ pub enum TypecheckError {
     UnknownRecordField,
 }
 
-pub fn typecheck(program: &Program, ast: &mut Ast, tcx: &mut TypeContext) -> Result<()> {
+pub fn typecheck(program: &Program, context: &mut crate::ast::Context) -> Result<()> {
+    let ast = &mut context.ast;
+    let tcx = &mut context.tcx;
     let mut env = TypeEnv::new();
 
     let all_defs: Vec<_> = program
@@ -211,6 +213,12 @@ fn check_command(
 ) -> Result<()> {
     match &ast.commands[cmd] {
         Command::Empty => Ok(()),
+        Command::Block(cmd) => {
+            env.with_scope(|env| check_command(*cmd, env, ast, tcx))
+                .context("failed to type check command: block")?;
+
+            Ok(())
+        }
         Command::Par(cmds) => {
             for cmd in cmds {
                 check_command(*cmd, env, ast, tcx)
@@ -505,6 +513,16 @@ fn check_command(
                                 id.resolve_id(ast)
                             )
                         })?;
+
+                        let val_ty = env
+                            .resolve_type(val_ty, tcx)
+                            .map_err(|_| TypecheckError::UnknownAlias)
+                            .with_context(|| {
+                                format!(
+                                    "failed to type check expression: value for let binding `{}`",
+                                    id.resolve_id(ast)
+                                )
+                            })?;
 
                         if let Some(resolved_ty) = resolved_ty {
                             let resolved_ty = match &tcx.types[resolved_ty] {
@@ -886,7 +904,7 @@ fn check_expr_(
 
 fn check_expr(expr: ExprId, env: &mut TypeEnv, ast: &Ast, tcx: &mut TypeContext) -> Result<TypeId> {
     let ty = check_expr_(expr, env, ast, tcx)?;
-    if let Some(prev_ty) = tcx.expr_type_map.get(expr) {
+    if let Some(prev_ty) = tcx.expr_type_map.get(&expr) {
         assert!(*prev_ty == ty, "Expression type changed during checking");
     }
     tcx.expr_type_map.insert(expr, ty);

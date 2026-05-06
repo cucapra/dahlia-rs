@@ -192,6 +192,10 @@ fn debug_command(context: &Context, command: &Command) -> Value {
         Command::Empty => json!({
             "kind": "CEmpty",
         }),
+        Command::Block(cmd) => json!({
+            "kind": "CBlock",
+            "cmd": debug_command_id(context, *cmd),
+        }),
         Command::Par(commands) => json!({
             "kind": "CPar",
             "cmds": debug_command_list(context, commands),
@@ -279,7 +283,7 @@ fn debug_command(context: &Context, command: &Command) -> Value {
 
 fn debug_expr_id(context: &Context, expr: ExprId) -> Value {
     let mut value = debug_expr(context, expr, &context.ast.exprs[expr]);
-    value["typ"] = type_annotation(context, context.tcx.expr_type_map.get(expr).copied());
+    value["typ"] = type_annotation(context, context.tcx.expr_type_map.get(&expr).copied());
     value
 }
 
