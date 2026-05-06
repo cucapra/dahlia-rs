@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use indexmap::IndexMap;
 use serde::{Serialize, Serializer};
 use serde_json::{Map, Value, json};
 
@@ -134,10 +135,9 @@ fn debug_field_entries(context: &Context, fields: &HashMap<FieldId, TypeId>) -> 
         .collect()
 }
 
-fn debug_expr_field_entries(context: &Context, fields: &HashMap<FieldId, ExprId>) -> Vec<Value> {
-    sorted_entries(context, fields)
-        .into_iter()
-        .map(|(id, expr)| json!({ "name": debug_field_id(context, id), "value": debug_expr_id(context, *expr) }))
+fn debug_expr_field_entries(context: &Context, fields: &IndexMap<FieldId, ExprId>) -> Vec<Value> {
+    fields.iter()
+        .map(|(id, expr)| json!({ "name": debug_field_id(context, *id), "value": debug_expr_id(context, *expr) }))
         .collect()
 }
 
@@ -347,6 +347,9 @@ fn debug_expr(context: &Context, _expr_id: ExprId, expr: &Expr) -> Value {
             "e1": debug_expr_id(context, *left),
             "e2": debug_expr_id(context, *right),
         }),
+        Expr::Placeholder => {
+            panic!("Placeholder expressions should not be present in the final AST")
+        }
     }
 }
 

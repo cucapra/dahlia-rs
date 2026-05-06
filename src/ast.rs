@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::{cell::RefCell, hash::Hash};
 
 use cranelift_entity::{EntityList, ListPool, PrimaryMap, entity_impl};
+use indexmap::IndexMap;
 
 #[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord, Default)]
 pub struct ExprId(u32);
@@ -425,13 +426,14 @@ pub enum InfixOp {
 
 #[derive(Debug)]
 pub enum Expr {
+    Placeholder,
     Cast {
         expr: ExprId,
         ty: TypeId,
     },
 
     ArrayLiteral(EntityList<ExprId>),
-    RecordLiteral(HashMap<FieldId, ExprId>),
+    RecordLiteral(IndexMap<FieldId, ExprId>),
 
     RationalLiteral(String),
     IntLiteral {

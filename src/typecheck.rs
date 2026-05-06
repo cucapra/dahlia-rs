@@ -751,6 +751,7 @@ fn check_expr_(
     tcx: &mut TypeContext,
 ) -> Result<TypeId> {
     match &ast.exprs[expr] {
+        Expr::Placeholder => unreachable!(),
         Expr::RationalLiteral(v) => Ok(tcx.get_rational(v.clone())),
         Expr::IntLiteral { value, .. } => Ok(tcx.get_static_int(*value)),
         Expr::BoolLiteral(_) => Ok(tcx.get_bool()),
