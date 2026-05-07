@@ -1,8 +1,11 @@
-use cranelift_entity::EntityList;
+use anyhow::{Context, Result};
 
-use crate::ast::{Ast, Command, CommandId, Expr, ExprId, TypeContext};
+use crate::ast::{
+    Ast, Command, CommandId, Decl, Def, Expr, ExprId, IdResolve, Program, TypeContext,
+};
 
 pub trait Env {
+    fn new() -> Self;
     fn with_scope<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R;
     fn merge(&mut self, other: Self);
 }
@@ -10,174 +13,236 @@ pub trait Env {
 pub trait Transformer {
     type E: Env + Clone;
 
+    const NAME: &'static str;
+
+    // when not handling a command or expression, the implemented trait function should call the corresponding top-level rewrite function
     fn rewrite_expr(
-        &mut self,
         expr: ExprId,
         env: &mut Self::E,
         ast: &mut Ast,
         tcx: &mut TypeContext,
-    );
+    ) -> Result<()>;
+
+    fn rewrite_lval(
+        expr: ExprId,
+        env: &mut Self::E,
+        ast: &mut Ast,
+        tcx: &mut TypeContext,
+    ) -> Result<()> {
+        Self::rewrite_expr(expr, env, ast, tcx)
+    }
+
+    fn rewrite_decl(
+        _decl: &mut Decl,
+        _env: &mut Self::E,
+        _ast: &mut Ast,
+        _tcx: &mut TypeContext,
+    ) -> Result<()> {
+        Ok(())
+    }
 
     fn rewrite_command(
-        &mut self,
         cmd: CommandId,
         env: &mut Self::E,
         ast: &mut Ast,
         tcx: &mut TypeContext,
-    );
+    ) -> Result<()>;
 }
 
-fn rewrite_expr<T: Transformer>(
-    t: &mut T,
+pub fn rewrite_expr<T: Transformer>(
     expr: ExprId,
     env: &mut T::E,
     ast: &mut Ast,
     tcx: &mut TypeContext,
-) {
-    enum PendingExpr {
-        EntityList(EntityList<ExprId>),
-        RecordLiteral(usize),
-        BinOp(ExprId, ExprId),
-    }
+) -> Result<()> {
+    let extracted_expr = std::mem::replace(&mut ast.exprs[expr], Expr::Placeholder);
 
-    let pending_expr = match &ast.exprs[expr] {
+    match &extracted_expr {
         Expr::Placeholder => unreachable!(),
         Expr::RationalLiteral(..)
         | Expr::IntLiteral { .. }
         | Expr::BoolLiteral(..)
-        | Expr::Id(..) => {
-            return;
+        | Expr::Id(..) => {}
+        Expr::RecordLiteral(fields) => {
+            fields
+                .values()
+                .try_for_each(|field| T::rewrite_expr(*field, env, ast, tcx))
+                .with_context(|| format!("{}: failed to rewrite record literal", T::NAME))?;
         }
-        Expr::RecordLiteral(fields) => PendingExpr::RecordLiteral(fields.len()),
-        Expr::ArrayLiteral(elems) => PendingExpr::EntityList(*elems),
-        Expr::BinOp { left, right, .. } => PendingExpr::BinOp(*left, *right),
-        Expr::Application { args, .. } => PendingExpr::EntityList(*args),
-        Expr::Cast { expr, .. } => {
-            t.rewrite_expr(*expr, env, ast, tcx);
-            return;
-        }
-        Expr::RecordAccess { record, .. } => {
-            t.rewrite_expr(*record, env, ast, tcx);
-            return;
-        }
-        Expr::ArrayAccess { indices, .. } => PendingExpr::EntityList(*indices),
-    };
-
-    match pending_expr {
-        PendingExpr::EntityList(exprs) => {
-            for i in 0..exprs.len(&ast.expr_lists) {
-                t.rewrite_expr(exprs.as_slice(&ast.expr_lists)[i], env, ast, tcx);
+        Expr::ArrayLiteral(elems) => {
+            for i in 0..elems.len(&ast.expr_lists) {
+                T::rewrite_expr(elems.as_slice(&ast.expr_lists)[i], env, ast, tcx)
+                    .with_context(|| format!("{}: failed to rewrite array literal", T::NAME))?;
             }
         }
-        PendingExpr::BinOp(left, right) => {
-            t.rewrite_expr(left, env, ast, tcx);
-            t.rewrite_expr(right, env, ast, tcx);
+        Expr::BinOp { left, right, .. } => {
+            T::rewrite_expr(*left, env, ast, tcx)
+                .with_context(|| format!("{}: failed to rewrite binary operation LHS", T::NAME))?;
+            T::rewrite_expr(*right, env, ast, tcx)
+                .with_context(|| format!("{}: failed to rewrite binary operation RHS", T::NAME))?;
         }
-        PendingExpr::RecordLiteral(len) => {
-            for i in 0..len {
-                let field = match &ast.exprs[expr] {
-                    Expr::RecordLiteral(fields) => *fields.get_index(i).unwrap().1,
-                    _ => unreachable!(),
-                };
-                t.rewrite_expr(field, env, ast, tcx);
+        Expr::Application { args, .. } => {
+            for i in 0..args.len(&ast.expr_lists) {
+                T::rewrite_expr(args.as_slice(&ast.expr_lists)[i], env, ast, tcx).with_context(
+                    || format!("{}: failed to rewrite application argument", T::NAME),
+                )?;
+            }
+        }
+        Expr::Cast { expr, .. } => {
+            T::rewrite_expr(*expr, env, ast, tcx)
+                .with_context(|| format!("{}: failed to rewrite cast expression", T::NAME))?;
+        }
+        Expr::RecordAccess { record, .. } => {
+            T::rewrite_expr(*record, env, ast, tcx).with_context(|| {
+                format!("{}: failed to rewrite record access expression", T::NAME)
+            })?;
+        }
+        Expr::ArrayAccess { indices, .. } => {
+            for i in 0..indices.len(&ast.expr_lists) {
+                T::rewrite_expr(indices.as_slice(&ast.expr_lists)[i], env, ast, tcx).with_context(
+                    || format!("{}: failed to rewrite array access expression", T::NAME),
+                )?;
             }
         }
     }
+
+    ast.exprs[expr] = extracted_expr;
+    Ok(())
 }
 
-fn rewrite_command<T: Transformer>(
-    t: &mut T,
+pub fn rewrite_command<T: Transformer>(
     cmd: CommandId,
     env: &mut T::E,
     ast: &mut Ast,
     tcx: &mut TypeContext,
-) {
-    enum PendingCommand {
-        Seq(usize),
-        Update(ExprId, ExprId),
-        IfElse {
-            cond: ExprId,
-            then: CommandId,
-            else_: CommandId,
-        },
-        For {
-            body: CommandId,
-            combine: CommandId,
-        },
-        While {
-            cond: ExprId,
-            body: CommandId,
-        },
-        Block(CommandId),
-    }
+) -> Result<()> {
+    let extracted_cmd = std::mem::replace(&mut ast.commands[cmd], Command::Empty);
 
-    let pending_command = match &ast.commands[cmd] {
-        Command::Split { .. } | Command::View { .. } | Command::Empty | Command::Decorate(..) => {
-            return;
+    match &extracted_cmd {
+        Command::Empty | Command::Split { .. } | Command::View { .. } | Command::Decorate(..) => {}
+        Command::Par(cmds) => {
+            cmds.iter()
+                .try_for_each(|cmd| T::rewrite_command(*cmd, env, ast, tcx))
+                .with_context(|| format!("{}: failed to rewrite Par command", T::NAME))?;
         }
-        Command::Par(cmds) | Command::Seq(cmds) => PendingCommand::Seq(cmds.len()),
-        Command::Update { lhs, rhs, .. } => PendingCommand::Update(*lhs, *rhs),
+        Command::Seq(cmds) => {
+            cmds.iter()
+                .try_for_each(|cmd| T::rewrite_command(*cmd, env, ast, tcx))
+                .with_context(|| format!("{}: failed to rewrite Seq command", T::NAME))?;
+        }
+        Command::Update { lhs, rhs, .. } => {
+            T::rewrite_lval(*lhs, env, ast, tcx)
+                .with_context(|| format!("{}: failed to rewrite update command LHS", T::NAME))?;
+            T::rewrite_expr(*rhs, env, ast, tcx)
+                .with_context(|| format!("{}: failed to rewrite update command RHS", T::NAME))?;
+        }
         Command::Let { value, .. } => {
             if let Some(value) = value {
-                t.rewrite_expr(*value, env, ast, tcx);
+                T::rewrite_expr(*value, env, ast, tcx).with_context(|| {
+                    format!("{}: failed to rewrite let binding initializer", T::NAME)
+                })?;
             }
-            return;
         }
         Command::Expr(expr) => {
-            t.rewrite_expr(*expr, env, ast, tcx);
-            return;
+            T::rewrite_expr(*expr, env, ast, tcx)
+                .with_context(|| format!("{}: failed to rewrite expression command", T::NAME))?;
         }
         Command::Return(expr) => {
-            t.rewrite_expr(*expr, env, ast, tcx);
-            return;
+            T::rewrite_expr(*expr, env, ast, tcx)
+                .with_context(|| format!("{}: failed to rewrite return command", T::NAME))?;
         }
-        Command::IfElse { cond, then, else_ } => PendingCommand::IfElse {
-            cond: *cond,
-            then: *then,
-            else_: *else_,
-        },
-        Command::For { body, combine, .. } => PendingCommand::For {
-            body: *body,
-            combine: *combine,
-        },
-        Command::While { cond, body, .. } => PendingCommand::While {
-            cond: *cond,
-            body: *body,
-        },
-        Command::Block(body) => PendingCommand::Block(*body),
-    };
-
-    match pending_command {
-        PendingCommand::Seq(len) => {
-            for i in 0..len {
-                let cmd = match &ast.commands[cmd] {
-                    Command::Par(cmds) | Command::Seq(cmds) => cmds[i],
-                    _ => unreachable!(),
-                };
-                rewrite_command(t, cmd, env, ast, tcx);
-            }
-        }
-        PendingCommand::Update(lhs, rhs) => {
-            t.rewrite_expr(lhs, env, ast, tcx);
-            t.rewrite_expr(rhs, env, ast, tcx);
-        }
-        PendingCommand::IfElse { cond, then, else_ } => {
-            t.rewrite_expr(cond, env, ast, tcx);
+        Command::IfElse { cond, then, else_ } => {
+            T::rewrite_expr(*cond, env, ast, tcx)
+                .with_context(|| format!("{}: failed to rewrite if condition", T::NAME))?;
             let mut new_env = env.clone();
-            env.with_scope(|env| t.rewrite_command(then, env, ast, tcx));
-            new_env.with_scope(|env| t.rewrite_command(else_, env, ast, tcx));
+            env.with_scope(|env| T::rewrite_command(*then, env, ast, tcx))
+                .with_context(|| format!("{}: failed to rewrite then branch", T::NAME))?;
+            new_env
+                .with_scope(|env| T::rewrite_command(*else_, env, ast, tcx))
+                .with_context(|| format!("{}: failed to rewrite else branch", T::NAME))?;
             env.merge(new_env);
         }
-        PendingCommand::For { body, combine } => {
-            env.with_scope(|env| t.rewrite_command(body, env, ast, tcx));
-            t.rewrite_command(combine, env, ast, tcx);
+        Command::For { body, combine, .. } => {
+            env.with_scope(|env| -> Result<()> {
+                T::rewrite_command(*body, env, ast, tcx)
+                    .with_context(|| format!("{}: failed to rewrite for body", T::NAME))?;
+                T::rewrite_command(*combine, env, ast, tcx)
+                    .with_context(|| format!("{}: failed to rewrite for combine", T::NAME))?;
+                Ok(())
+            })?;
         }
-        PendingCommand::While { cond, body } => {
-            t.rewrite_expr(cond, env, ast, tcx);
-            env.with_scope(|env| t.rewrite_command(body, env, ast, tcx));
+        Command::While { cond, body, .. } => {
+            T::rewrite_expr(*cond, env, ast, tcx)
+                .with_context(|| format!("{}: failed to rewrite while condition", T::NAME))?;
+            env.with_scope(|env| {
+                T::rewrite_command(*body, env, ast, tcx)
+                    .with_context(|| format!("{}: failed to rewrite while body", T::NAME))
+            })?;
         }
-        PendingCommand::Block(body) => {
-            env.with_scope(|env| t.rewrite_command(body, env, ast, tcx));
+        Command::Block(body) => {
+            env.with_scope(|env| {
+                T::rewrite_command(*body, env, ast, tcx)
+                    .with_context(|| format!("{}: failed to rewrite block", T::NAME))
+            })?;
         }
     }
+
+    ast.commands[cmd] = extracted_cmd;
+    Ok(())
+}
+
+fn rewrite_def<T: Transformer>(
+    def: &mut Def,
+    env: &mut T::E,
+    ast: &mut Ast,
+    tcx: &mut TypeContext,
+) -> Result<()> {
+    if let Def::Func { sig, body } = def {
+        env.with_scope(|env| {
+            sig.args
+                .iter_mut()
+                .try_for_each(|decl| T::rewrite_decl(decl, env, ast, tcx))
+                .with_context(|| {
+                    format!(
+                        "{}: failed to rewrite function arguments for `{}`",
+                        T::NAME,
+                        sig.name.resolve_id(ast)
+                    )
+                })?;
+
+            T::rewrite_command(*body, env, ast, tcx).with_context(|| {
+                format!(
+                    "{}: failed to rewrite function body for `{}`",
+                    T::NAME,
+                    sig.name.resolve_id(ast)
+                )
+            })
+        })?;
+    }
+
+    Ok(())
+}
+
+pub fn rewrite_program<T: Transformer>(
+    prog: &mut Program,
+    ctx: &mut crate::ast::Context,
+) -> Result<()> {
+    let mut env = T::E::new();
+    let ast = &mut ctx.ast;
+    let tcx = &mut ctx.tcx;
+
+    prog.defs
+        .iter_mut()
+        .try_for_each(|def| rewrite_def::<T>(def, &mut env, ast, tcx))
+        .with_context(|| format!("{}: failed to rewrite program definitions", T::NAME))?;
+
+    prog.decls
+        .iter_mut()
+        .try_for_each(|decl| T::rewrite_decl(decl, &mut env, ast, tcx))
+        .with_context(|| format!("{}: failed to rewrite program declarations", T::NAME))?;
+
+    T::rewrite_command(prog.cmd, &mut env, ast, tcx)
+        .with_context(|| format!("{}: failed to rewrite program command", T::NAME))?;
+
+    Ok(())
 }
