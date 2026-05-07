@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
+use crate::errors::TypecheckError;
 use anyhow::{Context, Result, anyhow};
-use thiserror::Error;
 
 use crate::{
     ast::{
@@ -12,50 +12,6 @@ use crate::{
     type_env::TypeEnv,
     utils::bits_needed,
 };
-
-#[derive(Debug, Error, PartialEq, Eq)]
-pub enum TypecheckError {
-    #[error("Unexpected type")]
-    UnexpectedType,
-    #[error("No common supertype found")]
-    NoJoin,
-    #[error("Invalid binary operation")]
-    BinopError,
-    #[error("Expression should be in let binder")]
-    NotInBinder,
-    #[error("Argument length mismatch")]
-    ArgLengthMismatch,
-    #[error("Incorrect number of dimensions for array access")]
-    IncorrectAccessDims,
-    #[error("Invalid shrink width")]
-    InvalidShrinkWidth,
-    #[error("Invalid align factor")]
-    InvalidAlignFactor,
-    #[error("Pipeline error")]
-    PipelineError,
-    #[error("Missing field in struct literal")]
-    MissingField,
-    #[error("Extra fields in struct literal")]
-    ExtraFields,
-    #[error("Invalid split factor")]
-    InvalidSplitFactor,
-    #[error("Type is already bound")]
-    AlreadyBound,
-    #[error("Explicit type annotation is required")]
-    ExplicitTypeMissing,
-    #[error("Unsupported feature: {0}")]
-    Unsupported(&'static str),
-    #[error("Array literal length mismatch")]
-    LiteralLengthMismatch,
-    #[error("Unknown type alias")]
-    UnknownAlias,
-    #[error("Invalid array dimensions")]
-    InvalidArrayDims,
-    #[error("Unbound variable")]
-    Unbound,
-    #[error("Unknown record field")]
-    UnknownRecordField,
-}
 
 pub fn typecheck(program: &Program, context: &mut crate::ast::Context) -> Result<()> {
     let ast = &mut context.ast;
@@ -109,9 +65,8 @@ fn check_decl(decl: &Decl, env: &mut TypeEnv, ast: &Ast, tcx: &mut TypeContext) 
             )
         })?;
     tcx.value_type_map.insert(decl.id, resolved_ty);
-    env.add(decl.id, resolved_ty, ast, tcx)
-        .map_err(|_| TypecheckError::AlreadyBound)
-        .with_context(|| format!("`{}` already bound", decl.id.resolve_id(ast)))?;
+    env.add(decl.id, resolved_ty, tcx)
+        .expect("duplicate binding should have been caught by name resolution");
     Ok(())
 }
 
@@ -140,59 +95,56 @@ fn check_def(def: &Def, env: &mut TypeEnv, ast: &Ast, tcx: &mut TypeContext) -> 
             .with_context(|| format!("record type `{}` already bound", name.resolve_id(ast)))?;
         }
         Def::Func { sig, body } => {
-            env.with_scope(|env| -> Result<()> {
-                // add args to env
-                for decl in &sig.args {
-                    check_decl(decl, env, ast, tcx).with_context(|| {
-                        format!(
-                            "failed to type check function `{}` argument `{}`",
-                            sig.name.resolve_id(ast),
-                            decl.id.resolve_id(ast),
-                        )
-                    })?;
-                }
-
-                // add return type to env
-                let resolved_ret_ty = env
-                    .resolve_type(sig.ret_ty, tcx)
-                    .map_err(|_| TypecheckError::UnknownAlias)
-                    .with_context(|| {
-                        format!(
-                            "failed to type check function `{}` return type",
-                            sig.name.resolve_id(ast)
-                        )
-                    })?;
-                env.set_ret_type(resolved_ret_ty);
-
-                check_command(*body, env, ast, tcx).with_context(|| {
+            // add args to env
+            for decl in &sig.args {
+                check_decl(decl, env, ast, tcx).with_context(|| {
                     format!(
-                        "failed to type check command: function `{}` body",
+                        "failed to type check function `{}` argument `{}`",
+                        sig.name.resolve_id(ast),
+                        decl.id.resolve_id(ast),
+                    )
+                })?;
+            }
+
+            // add return type to env
+            let resolved_ret_ty = env
+                .resolve_type(sig.ret_ty, tcx)
+                .map_err(|_| TypecheckError::UnknownAlias)
+                .with_context(|| {
+                    format!(
+                        "failed to type check function `{}` return type",
                         sig.name.resolve_id(ast)
                     )
                 })?;
+            env.set_ret_type(resolved_ret_ty);
 
-                let resolved_arg_types = sig
-                    .args
-                    .iter()
-                    .map(|decl| {
-                        env.resolve_type(decl.ty, tcx)
-                            .map_err(|_| anyhow!(TypecheckError::UnknownAlias))
-                    })
-                    .collect::<Result<Vec<_>>>()
-                    .with_context(|| {
-                        format!(
-                            "failed to type check command: function `{}` arg types resolution",
-                            sig.name.resolve_id(ast),
-                        )
-                    })?;
-
-                env.add_func(sig.name, tcx.get_func(resolved_arg_types, resolved_ret_ty))
-                    .map_err(|_| TypecheckError::AlreadyBound)
-                    .with_context(|| {
-                        format!("function `{}` already bound", sig.name.resolve_id(ast))
-                    })?;
-                Ok(())
+            check_command(*body, env, ast, tcx).with_context(|| {
+                format!(
+                    "failed to type check command: function `{}` body",
+                    sig.name.resolve_id(ast)
+                )
             })?;
+
+            let resolved_arg_types = sig
+                .args
+                .iter()
+                .map(|decl| {
+                    env.resolve_type(decl.ty, tcx)
+                        .map_err(|_| anyhow!(TypecheckError::UnknownAlias))
+                })
+                .collect::<Result<Vec<_>>>()
+                .with_context(|| {
+                    format!(
+                        "failed to type check command: function `{}` arg types resolution",
+                        sig.name.resolve_id(ast),
+                    )
+                })?;
+
+            env.add_func(sig.name, tcx.get_func(resolved_arg_types, resolved_ret_ty))
+                .map_err(|_| TypecheckError::AlreadyBound)
+                .with_context(|| {
+                    format!("function `{}` already bound", sig.name.resolve_id(ast))
+                })?;
         }
     }
     Ok(())
@@ -214,8 +166,7 @@ fn check_command(
     match &ast.commands[cmd] {
         Command::Empty => Ok(()),
         Command::Block(cmd) => {
-            env.with_scope(|env| check_command(*cmd, env, ast, tcx))
-                .context("failed to type check command: block")?;
+            check_command(*cmd, env, ast, tcx).context("failed to type check command: block")?;
 
             Ok(())
         }
@@ -241,9 +192,9 @@ fn check_command(
                     .context("failed to type check expression: if condition must be bool")?;
             }
 
-            env.with_scope(|env| check_command(*then, env, ast, tcx))
+            check_command(*then, env, ast, tcx)
                 .context("failed to type check command: if then branch")?;
-            env.with_scope(|env| check_command(*else_, env, ast, tcx))
+            check_command(*else_, env, ast, tcx)
                 .context("failed to type check command: if else branch")?;
 
             Ok(())
@@ -257,29 +208,20 @@ fn check_command(
             check_pipeline(*pipeline, *body, ast)
                 .context("failed to type check command: for pipeline")?;
 
-            env.with_scope(|env| {
-                env.add(
-                    range.iter,
-                    tcx.get_index(
-                        (0, range.unroll),
-                        (range.start / range.unroll, range.end / range.unroll),
-                    ),
-                    ast,
-                    tcx,
-                )
-                .map_err(|_| TypecheckError::AlreadyBound)
-                .with_context(|| {
-                    format!(
-                        "for range iterator `{}` already bound",
-                        range.iter.resolve_id(ast)
-                    )
-                })?;
+            env.add(
+                range.iter,
+                tcx.get_index(
+                    (0, range.unroll),
+                    (range.start / range.unroll, range.end / range.unroll),
+                ),
+                tcx,
+            )
+            .expect("duplicate binding should have been caught by name resolution");
 
-                check_command(*body, env, ast, tcx)
-                    .context("failed to type check command: for body")?;
-                check_command(*combine, env, ast, tcx)
-                    .context("failed to type check command: for combine")
-            })?;
+            check_command(*body, env, ast, tcx)
+                .context("failed to type check command: for body")?;
+            check_command(*combine, env, ast, tcx)
+                .context("failed to type check command: for combine")?;
 
             Ok(())
         }
@@ -298,7 +240,7 @@ fn check_command(
                     .context("failed to type check expression: while condition must be bool")?;
             }
 
-            env.with_scope(|env| check_command(*body, env, ast, tcx))
+            check_command(*body, env, ast, tcx)
                 .context("failed to type check command: while body")?;
 
             Ok(())
@@ -407,9 +349,8 @@ fn check_command(
                         }
 
                         tcx.value_type_map.insert(*id, ty);
-                        env.add(*id, resolved_ty, ast, tcx)
-                            .map_err(|_| TypecheckError::AlreadyBound)
-                            .with_context(|| format!("`{}` already bound", id.resolve_id(ast)))?;
+                        env.add(*id, resolved_ty, tcx)
+                            .expect("duplicate binding should have been caught by name resolution");
                     }
 
                     Expr::RecordLiteral(fields) => {
@@ -489,9 +430,8 @@ fn check_command(
                             })?;
                         }
 
-                        env.add(*id, resolved_ty, ast, tcx)
-                            .map_err(|_| TypecheckError::AlreadyBound)
-                            .with_context(|| format!("`{}` already bound", id.resolve_id(ast)))?;
+                        env.add(*id, resolved_ty, tcx)
+                            .expect("duplicate binding should have been caught by name resolution");
                     }
                     _ => {
                         let resolved_ty = ty
@@ -541,11 +481,8 @@ fn check_command(
                                     },
                                 )?;
                             }
-                            env.add(*id, resolved_ty, ast, tcx)
-                                .map_err(|_| TypecheckError::AlreadyBound)
-                                .with_context(|| {
-                                    format!("`{}` already bound", id.resolve_id(ast))
-                                })?;
+                            env.add(*id, resolved_ty, tcx)
+                                .expect("duplicate binding should have been caught by name resolution");
                         } else {
                             let typ = match &tcx.types[val_ty] {
                                 Type::StaticInt(v) => tcx.get_bit(bits_needed(*v), false),
@@ -553,11 +490,8 @@ fn check_command(
                                 _ => val_ty,
                             };
 
-                            env.add(*id, typ, ast, tcx)
-                                .map_err(|_| TypecheckError::AlreadyBound)
-                                .with_context(|| {
-                                    format!("`{}` already bound", id.resolve_id(ast))
-                                })?;
+                            env.add(*id, typ, tcx)
+                                .expect("duplicate binding should have been caught by name resolution");
                         }
                     }
                 }
@@ -579,9 +513,8 @@ fn check_command(
                             id.resolve_id(ast)
                         )
                     })?;
-                env.add(*id, resolved_ty, ast, tcx)
-                    .map_err(|_| TypecheckError::AlreadyBound)
-                    .with_context(|| format!("`{}` already bound", id.resolve_id(ast)))?;
+                env.add(*id, resolved_ty, tcx)
+                    .expect("duplicate binding should have been caught by name resolution");
             }
 
             Ok(())
@@ -610,14 +543,8 @@ fn check_command(
             dims: view_dims,
         } => {
             let arr_ty = env
-                .get(arr_id, ast)
-                .ok_or(TypecheckError::Unbound)
-                .with_context(|| {
-                    format!(
-                        "failed to type check command: view `{}`",
-                        id.resolve_id(ast)
-                    )
-                })?;
+                .get(arr_id)
+                .expect("array should be bound after name resolution");
 
             let (element_ty, arr_dims_len, ports) = match &tcx.types[arr_ty] {
                 Type::Array {
@@ -665,22 +592,15 @@ fn check_command(
             tcx.value_type_map.insert(*id, new_ty);
             tcx.value_type_map.insert(*arr_id, arr_ty);
 
-            env.add(*id, new_ty, ast, tcx)
-                .map_err(|_| TypecheckError::AlreadyBound)
-                .with_context(|| format!("`{}` already bound", id.resolve_id(ast)))?;
+            env.add(*id, new_ty, tcx)
+                .expect("duplicate binding should have been caught by name resolution");
 
             Ok(())
         }
         Command::Split { id, arr_id, dims } => {
             let arr_ty = env
-                .get(arr_id, ast)
-                .ok_or(TypecheckError::Unbound)
-                .with_context(|| {
-                    format!(
-                        "failed to type check command: split `{}`",
-                        id.resolve_id(ast)
-                    )
-                })?;
+                .get(arr_id)
+                .expect("array should be bound after name resolution");
 
             let (element_ty, arr_dims, ports) = match &tcx.types[arr_ty] {
                 Type::Array {
@@ -735,9 +655,8 @@ fn check_command(
             tcx.value_type_map.insert(*id, view_ty);
             tcx.value_type_map.insert(*arr_id, arr_ty);
 
-            env.add(*id, view_ty, ast, tcx)
-                .map_err(|_| TypecheckError::AlreadyBound)
-                .with_context(|| format!("`{}` already bound", id.resolve_id(ast)))?;
+            env.add(*id, view_ty, tcx)
+                .expect("duplicate binding should have been caught by name resolution");
 
             Ok(())
         }
@@ -766,9 +685,8 @@ fn check_expr_(
         }
         Expr::Id(id) => {
             let ty = env
-                .get(id, ast)
-                .ok_or(TypecheckError::Unbound)
-                .with_context(|| format!("`{}` unbound", id.resolve_id(ast)))?;
+                .get(id)
+                .expect("identifier should be bound after name resolution");
             tcx.value_type_map.insert(*id, ty);
             Ok(ty)
         }
@@ -850,14 +768,9 @@ fn check_expr_(
         }
         Expr::ArrayAccess { array, indices } => {
             let (element_ty, dims_len) = match &tcx.types[env
-                .get(array, ast)
-                .ok_or(TypecheckError::Unbound)
-                .with_context(|| {
-                    format!(
-                        "failed to type check expression: array access `{}`",
-                        array.resolve_id(ast)
-                    )
-                })?] {
+                .get(array)
+                .expect("array should be bound after name resolution")]
+            {
                 Type::Array {
                     element_type, dims, ..
                 } => (*element_type, dims.len()),

@@ -3,19 +3,40 @@ use std::cell::RefCell;
 use anyhow::Error;
 use dahlia_rs::{
     ast::Context,
+    errors::{ResolveError, TypecheckError},
     parser::parse_dahlia,
-    typecheck::{TypecheckError, typecheck},
+    resolver::resolve_names,
+    typecheck::typecheck,
 };
 
 fn parse_and_typecheck(input: &str) -> Result<(), Error> {
     let context = RefCell::new(Context::new());
     let program = parse_dahlia(input, &context).expect("program should parse");
     let mut context = context.into_inner();
+    resolve_names(&program, &mut context)?;
     typecheck(&program, &mut context)
 }
 
 fn typecheck_ok(input: &str) {
     assert!(parse_and_typecheck(input).is_ok());
+}
+
+#[derive(Debug)]
+enum ExpectedError {
+    Resolve(ResolveError),
+    Type(TypecheckError),
+}
+
+impl From<ResolveError> for ExpectedError {
+    fn from(e: ResolveError) -> Self {
+        Self::Resolve(e)
+    }
+}
+
+impl From<TypecheckError> for ExpectedError {
+    fn from(e: TypecheckError) -> Self {
+        Self::Type(e)
+    }
 }
 
 fn same_error_kind(actual: &TypecheckError, expected: &TypecheckError) -> bool {
@@ -25,13 +46,33 @@ fn same_error_kind(actual: &TypecheckError, expected: &TypecheckError) -> bool {
     }
 }
 
-fn typecheck_err(input: &str, expected: TypecheckError) {
+fn typecheck_err(input: &str, expected: impl Into<ExpectedError>) {
+    let expected = expected.into();
     let err = parse_and_typecheck(input).expect_err("program should fail to typecheck");
-    let actual = err
-        .downcast_ref::<TypecheckError>()
-        .expect("error should be a TypecheckError");
-
-    assert!(same_error_kind(actual, &expected));
+    match expected {
+        ExpectedError::Resolve(expected) => {
+            let actual = err
+                .downcast_ref::<ResolveError>()
+                .expect("error should be a ResolveError");
+            assert!(
+                *actual == expected,
+                "expected {:?}, got {:?}",
+                expected,
+                actual
+            );
+        }
+        ExpectedError::Type(expected) => {
+            let actual = err
+                .downcast_ref::<TypecheckError>()
+                .expect("error should be a TypecheckError");
+            assert!(
+                same_error_kind(actual, &expected),
+                "expected {:?}, got {:?}",
+                expected,
+                actual
+            );
+        }
+    }
 }
 
 fn parse_err(input: &str) {
@@ -67,7 +108,7 @@ fn let_bindings() {
 
 #[test]
 fn unbound_array_access_and_scoping() {
-    typecheck_err("x + 1;", TypecheckError::Unbound);
+    typecheck_err("x + 1;", ResolveError::Unbound);
 
     typecheck_err(
         r#"
@@ -91,17 +132,17 @@ fn unbound_array_access_and_scoping() {
         TypecheckError::IncorrectAccessDims,
     );
 
-    typecheck_err("let x = 1; let x = 1;", TypecheckError::AlreadyBound);
+    typecheck_err("let x = 1; let x = 1;", ResolveError::AlreadyBound);
     typecheck_err(
         "let x = 1; if(true) { let x = 1; }",
-        TypecheckError::AlreadyBound,
+        ResolveError::AlreadyBound,
     );
-    typecheck_err("if (true) {let x = 1;} x + 2;", TypecheckError::Unbound);
+    typecheck_err("if (true) {let x = 1;} x + 2;", ResolveError::Unbound);
     typecheck_err(
         "for (let i = 0..10){let x = 1;} x + 2;",
-        TypecheckError::Unbound,
+        ResolveError::Unbound,
     );
-    typecheck_err("while (true) {let x = 1;} x + 2;", TypecheckError::Unbound);
+    typecheck_err("while (true) {let x = 1;} x + 2;", ResolveError::Unbound);
 
     typecheck_ok(
         r#"
@@ -121,7 +162,7 @@ fn unbound_array_access_and_scoping() {
     }
     x;
     "#,
-        TypecheckError::Unbound,
+        ResolveError::Unbound,
     );
 }
 
@@ -220,7 +261,7 @@ fn functions_and_applications() {
         r#"
           def foo(a: bool, a: bit<10>) = {}
         "#,
-        TypecheckError::AlreadyBound,
+        ResolveError::AlreadyBound,
     );
     typecheck_err(
         r#"
@@ -297,6 +338,7 @@ fn views_and_splits() {
     typecheck_err(
         r#"
           decl a: bit<10>[10 bank 5][10 bank 5];
+          decl i: bit<32>;
           view v = a[5 * i :];
         "#,
         TypecheckError::IncorrectAccessDims,

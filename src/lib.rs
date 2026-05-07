@@ -1,6 +1,9 @@
 pub mod ast;
 pub mod ast_debug;
+pub mod errors;
 pub mod parser;
+pub mod resolver;
+pub mod resolver_env;
 pub mod scoped_map;
 pub mod subtyping;
 pub mod transformer;

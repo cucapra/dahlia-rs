@@ -1,6 +1,9 @@
 use std::cell::RefCell;
 
-use dahlia_rs::{ast::Context, ast_debug::ast_debug, parser::parse_dahlia, typecheck::typecheck};
+use dahlia_rs::{
+    ast::Context, ast_debug::ast_debug, parser::parse_dahlia, resolver::resolve_names,
+    typecheck::typecheck,
+};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     /* let source = r###"
@@ -56,6 +59,7 @@ let b: point = (a as point);
 
     let mut context = context.into_inner();
 
+    resolve_names(&program, &mut context)?;
     typecheck(&program, &mut context)?;
     ast_debug(&context, &program);
 

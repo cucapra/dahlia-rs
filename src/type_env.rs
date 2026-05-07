@@ -1,33 +1,21 @@
 use std::collections::HashMap;
 
-use thiserror::Error;
-
 use crate::{
-    ast::{Ast, FuncId, RecordId, Symbol, Type, TypeContext, TypeId, ValueId},
-    scoped_map::ScopedMap,
+    ast::{FuncId, RecordId, Type, TypeContext, TypeId, ValueId},
+    errors::TypeEnvError,
 };
 
 pub struct TypeEnv {
-    val_map: ScopedMap<Symbol, TypeId>,
+    val_map: HashMap<ValueId, TypeId>,
     record_map: HashMap<RecordId, TypeId>,
     func_map: HashMap<FuncId, TypeId>,
     ret_type: Option<TypeId>,
 }
 
-#[derive(Debug, Error)]
-pub enum TypeEnvError {
-    #[error("Type is unbound")]
-    Unbound,
-    #[error("Type is already bound")]
-    AlreadyBound,
-    #[error("Unknown alias")]
-    UnknownAlias,
-}
-
 impl TypeEnv {
     pub fn new() -> Self {
         Self {
-            val_map: ScopedMap::new(),
+            val_map: HashMap::new(),
             record_map: HashMap::new(),
             func_map: HashMap::new(),
             ret_type: None,
@@ -97,40 +85,22 @@ impl TypeEnv {
         }
     }
 
-    pub fn get(&self, id: &ValueId, ast: &Ast) -> Option<TypeId> {
-        self.val_map
-            .get(ast.values.get(*id).expect("Value ID not found"))
-            .copied()
+    pub fn get(&self, id: &ValueId) -> Option<TypeId> {
+        self.val_map.get(id).copied()
     }
 
     pub fn add(
         &mut self,
         id: ValueId,
         type_id: TypeId,
-        ast: &Ast,
         tcx: &mut TypeContext,
     ) -> Result<(), TypeEnvError> {
-        self.val_map
-            .add(
-                *ast.values.get(id).expect("Value ID not found"),
-                self.resolve_type(type_id, tcx)?,
-            )
-            .map_err(|_| TypeEnvError::AlreadyBound)
-    }
-
-    pub fn push_scope(&mut self) {
-        self.val_map.push_scope();
-    }
-
-    pub fn pop_scope(&mut self) {
-        self.val_map.pop_scope();
-    }
-
-    pub fn with_scope<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
-        self.push_scope();
-        let result = f(self);
-        self.pop_scope();
-        result
+        if self.val_map.contains_key(&id) {
+            Err(TypeEnvError::AlreadyBound)
+        } else {
+            self.val_map.insert(id, self.resolve_type(type_id, tcx)?);
+            Ok(())
+        }
     }
 
     pub fn set_ret_type(&mut self, ret_type: TypeId) {

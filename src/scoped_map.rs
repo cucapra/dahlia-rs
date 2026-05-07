@@ -1,17 +1,9 @@
 use std::{collections::HashMap, hash::Hash};
 
-use thiserror::Error;
+use crate::errors::ScopedMapError;
 
 pub struct ScopedMap<K, V> {
     scopes: Vec<HashMap<K, V>>,
-}
-
-#[derive(Debug, Error)]
-pub enum ScopedMapError {
-    #[error("Key already exists in the current scope")]
-    KeyAlreadyExists,
-    #[error("Key not found in any scope")]
-    KeyNotFound,
 }
 
 impl<K: Eq + Hash, V> ScopedMap<K, V> {
