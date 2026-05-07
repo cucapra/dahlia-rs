@@ -1,12 +1,11 @@
 use std::collections::HashMap;
 
 use crate::{
-    ast::{FuncId, RecordId, Type, TypeContext, TypeId, ValueId},
+    ast::{FuncId, RecordId, Type, TypeContext, TypeId},
     errors::TypeEnvError,
 };
 
 pub struct TypeEnv {
-    val_map: HashMap<ValueId, TypeId>,
     record_map: HashMap<RecordId, TypeId>,
     func_map: HashMap<FuncId, TypeId>,
     ret_type: Option<TypeId>,
@@ -15,7 +14,6 @@ pub struct TypeEnv {
 impl TypeEnv {
     pub fn new() -> Self {
         Self {
-            val_map: HashMap::new(),
             record_map: HashMap::new(),
             func_map: HashMap::new(),
             ret_type: None,
@@ -82,24 +80,6 @@ impl TypeEnv {
                 Ok(tcx.get_array(resolved_element_type, dims, ports))
             }
             _ => unreachable!(),
-        }
-    }
-
-    pub fn get(&self, id: &ValueId) -> Option<TypeId> {
-        self.val_map.get(id).copied()
-    }
-
-    pub fn add(
-        &mut self,
-        id: ValueId,
-        type_id: TypeId,
-        tcx: &mut TypeContext,
-    ) -> Result<(), TypeEnvError> {
-        if self.val_map.contains_key(&id) {
-            Err(TypeEnvError::AlreadyBound)
-        } else {
-            self.val_map.insert(id, self.resolve_type(type_id, tcx)?);
-            Ok(())
         }
     }
 

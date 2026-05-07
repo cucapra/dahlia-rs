@@ -65,8 +65,6 @@ fn check_decl(decl: &Decl, env: &mut TypeEnv, ast: &Ast, tcx: &mut TypeContext) 
             )
         })?;
     tcx.value_type_map.insert(decl.id, resolved_ty);
-    env.add(decl.id, resolved_ty, tcx)
-        .expect("duplicate binding should have been caught by name resolution");
     Ok(())
 }
 
@@ -208,15 +206,11 @@ fn check_command(
             check_pipeline(*pipeline, *body, ast)
                 .context("failed to type check command: for pipeline")?;
 
-            env.add(
-                range.iter,
-                tcx.get_index(
-                    (0, range.unroll),
-                    (range.start / range.unroll, range.end / range.unroll),
-                ),
-                tcx,
-            )
-            .expect("duplicate binding should have been caught by name resolution");
+            let iter_ty = tcx.get_index(
+                (0, range.unroll),
+                (range.start / range.unroll, range.end / range.unroll),
+            );
+            tcx.value_type_map.insert(range.iter, iter_ty);
 
             check_command(*body, env, ast, tcx)
                 .context("failed to type check command: for body")?;
@@ -348,9 +342,7 @@ fn check_command(
                             }
                         }
 
-                        tcx.value_type_map.insert(*id, ty);
-                        env.add(*id, resolved_ty, tcx)
-                            .expect("duplicate binding should have been caught by name resolution");
+                        tcx.value_type_map.insert(*id, resolved_ty);
                     }
 
                     Expr::RecordLiteral(fields) => {
@@ -430,8 +422,7 @@ fn check_command(
                             })?;
                         }
 
-                        env.add(*id, resolved_ty, tcx)
-                            .expect("duplicate binding should have been caught by name resolution");
+                        tcx.value_type_map.insert(*id, resolved_ty);
                     }
                     _ => {
                         let resolved_ty = ty
@@ -481,8 +472,7 @@ fn check_command(
                                     },
                                 )?;
                             }
-                            env.add(*id, resolved_ty, tcx)
-                                .expect("duplicate binding should have been caught by name resolution");
+                            tcx.value_type_map.insert(*id, resolved_ty);
                         } else {
                             let typ = match &tcx.types[val_ty] {
                                 Type::StaticInt(v) => tcx.get_bit(bits_needed(*v), false),
@@ -490,8 +480,7 @@ fn check_command(
                                 _ => val_ty,
                             };
 
-                            env.add(*id, typ, tcx)
-                                .expect("duplicate binding should have been caught by name resolution");
+                            tcx.value_type_map.insert(*id, typ);
                         }
                     }
                 }
@@ -513,8 +502,7 @@ fn check_command(
                             id.resolve_id(ast)
                         )
                     })?;
-                env.add(*id, resolved_ty, tcx)
-                    .expect("duplicate binding should have been caught by name resolution");
+                tcx.value_type_map.insert(*id, resolved_ty);
             }
 
             Ok(())
@@ -542,8 +530,10 @@ fn check_command(
             arr_id,
             dims: view_dims,
         } => {
-            let arr_ty = env
+            let arr_ty = tcx
+                .value_type_map
                 .get(arr_id)
+                .copied()
                 .expect("array should be bound after name resolution");
 
             let (element_ty, arr_dims_len, ports) = match &tcx.types[arr_ty] {
@@ -590,16 +580,14 @@ fn check_command(
             let new_ty = tcx.get_array(element_ty, new_dims, ports);
 
             tcx.value_type_map.insert(*id, new_ty);
-            tcx.value_type_map.insert(*arr_id, arr_ty);
-
-            env.add(*id, new_ty, tcx)
-                .expect("duplicate binding should have been caught by name resolution");
 
             Ok(())
         }
         Command::Split { id, arr_id, dims } => {
-            let arr_ty = env
+            let arr_ty = tcx
+                .value_type_map
                 .get(arr_id)
+                .copied()
                 .expect("array should be bound after name resolution");
 
             let (element_ty, arr_dims, ports) = match &tcx.types[arr_ty] {
@@ -653,10 +641,6 @@ fn check_command(
             let view_ty = tcx.get_array(element_ty, split_dims, ports);
 
             tcx.value_type_map.insert(*id, view_ty);
-            tcx.value_type_map.insert(*arr_id, arr_ty);
-
-            env.add(*id, view_ty, tcx)
-                .expect("duplicate binding should have been caught by name resolution");
 
             Ok(())
         }
@@ -684,10 +668,11 @@ fn check_expr_(
             Ok(*cast_ty)
         }
         Expr::Id(id) => {
-            let ty = env
+            let ty = tcx
+                .value_type_map
                 .get(id)
+                .copied()
                 .expect("identifier should be bound after name resolution");
-            tcx.value_type_map.insert(*id, ty);
             Ok(ty)
         }
         Expr::BinOp { left, op, right } => {
@@ -767,10 +752,12 @@ fn check_expr_(
                 })
         }
         Expr::ArrayAccess { array, indices } => {
-            let (element_ty, dims_len) = match &tcx.types[env
+            let array_ty = tcx
+                .value_type_map
                 .get(array)
-                .expect("array should be bound after name resolution")]
-            {
+                .copied()
+                .expect("array should be bound after name resolution");
+            let (element_ty, dims_len) = match &tcx.types[array_ty] {
                 Type::Array {
                     element_type, dims, ..
                 } => (*element_type, dims.len()),
@@ -810,7 +797,6 @@ fn check_expr_(
                     )
                 })?;
 
-            tcx.value_type_map.insert(*array, element_ty);
             Ok(element_ty)
         }
     }
