@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::{cell::RefCell, mem::discriminant};
 
 use anyhow::Error;
 use dahlia_rs::{
@@ -39,13 +39,6 @@ impl From<TypecheckError> for ExpectedError {
     }
 }
 
-fn same_error_kind(actual: &TypecheckError, expected: &TypecheckError) -> bool {
-    match (actual, expected) {
-        (TypecheckError::Unsupported(_), TypecheckError::Unsupported(_)) => true,
-        _ => actual == expected,
-    }
-}
-
 fn typecheck_err(input: &str, expected: impl Into<ExpectedError>) {
     let expected = expected.into();
     let err = parse_and_typecheck(input).expect_err("program should fail to typecheck");
@@ -55,7 +48,7 @@ fn typecheck_err(input: &str, expected: impl Into<ExpectedError>) {
                 .downcast_ref::<ResolveError>()
                 .expect("error should be a ResolveError");
             assert!(
-                *actual == expected,
+                discriminant(&expected) == discriminant(actual),
                 "expected {:?}, got {:?}",
                 expected,
                 actual
@@ -66,7 +59,7 @@ fn typecheck_err(input: &str, expected: impl Into<ExpectedError>) {
                 .downcast_ref::<TypecheckError>()
                 .expect("error should be a TypecheckError");
             assert!(
-                same_error_kind(actual, &expected),
+                discriminant(&expected) == discriminant(actual),
                 "expected {:?}, got {:?}",
                 expected,
                 actual

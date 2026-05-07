@@ -113,12 +113,10 @@ fn join_of_helper(
             let v2: f64 = v2.parse().expect("Invalid rational number");
             if let Some(val) = eval_op(op, v1, v2) {
                 Some(tcx.get_rational(val.to_string()))
+            } else if bits_needed(v1 as i64) > bits_needed(v2 as i64) {
+                Some(tcx.get_rational(v1.to_string()))
             } else {
-                if bits_needed(v1 as i64) > bits_needed(v2 as i64) {
-                    Some(tcx.get_rational(v1.to_string()))
-                } else {
-                    Some(tcx.get_rational(v2.to_string()))
-                }
+                Some(tcx.get_rational(v2.to_string()))
             }
         }
         (
@@ -209,7 +207,7 @@ fn join_of_helper(
 }
 
 pub fn join_of(tid1: TypeId, tid2: TypeId, op: InfixOp, tcx: &mut TypeContext) -> Option<TypeId> {
-    if let Some(join) = join_of_helper(tid1, tid2, op.clone(), tcx) {
+    if let Some(join) = join_of_helper(tid1, tid2, op, tcx) {
         Some(join)
     } else {
         join_of_helper(tid2, tid1, op, tcx)

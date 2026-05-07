@@ -18,24 +18,22 @@ pub fn typecheck(program: &Program, context: &mut crate::ast::Context) -> Result
     let tcx = &mut context.tcx;
     let mut env = TypeEnv::new();
 
-    let all_defs: Vec<_> = program
+    program
         .includes
         .iter()
         .flat_map(|include| &include.defs)
         .chain(&program.defs)
-        .collect();
-
-    for def in all_defs {
-        check_def(def, &mut env, ast, tcx).with_context(|| {
-            format!(
-                "failed to type check definition `{}`",
-                match def {
-                    Def::Record { name, .. } => name.resolve_id(ast),
-                    Def::Func { sig, .. } => sig.name.resolve_id(ast),
-                }
-            )
+        .try_for_each(|def| {
+            check_def(def, &mut env, ast, tcx).with_context(|| {
+                format!(
+                    "failed to type check definition `{}`",
+                    match def {
+                        Def::Record { name, .. } => name.resolve_id(ast),
+                        Def::Func { sig, .. } => sig.name.resolve_id(ast),
+                    }
+                )
+            })
         })?;
-    }
 
     for decl in &program.decls {
         check_decl(decl, &mut env, ast, tcx).with_context(|| {
@@ -75,22 +73,20 @@ fn check_def(def: &Def, env: &mut TypeEnv, ast: &Ast, tcx: &mut TypeContext) -> 
                 .iter()
                 .map(|(id, ty)| {
                     env.resolve_type(*ty, tcx)
-                        .map(|resolved| (id.clone(), resolved))
+                        .map(|resolved| (*id, resolved))
                         .map_err(|_| TypecheckError::UnknownAlias)
+                        .with_context(|| {
+                            format!(
+                                "failed to type check record definition `{}` field `{}` type",
+                                name.resolve_id(ast),
+                                id.resolve_id(ast)
+                            )
+                        })
                 })
-                .collect::<Result<_, _>>()
-                .with_context(|| {
-                    format!(
-                        "failed to type check record definition `{}` field types",
-                        name.resolve_id(ast)
-                    )
-                })?;
-            env.add_record(
-                name.clone(),
-                tcx.get_rec_type(name.clone(), resolved_fields),
-            )
-            .map_err(|_| TypecheckError::AlreadyBound)
-            .with_context(|| format!("record type `{}` already bound", name.resolve_id(ast)))?;
+                .collect::<Result<_>>()?;
+            env.add_record(*name, tcx.get_rec_type(*name, resolved_fields))
+                .map_err(|_| TypecheckError::AlreadyBound)
+                .with_context(|| format!("record type `{}` already bound", name.resolve_id(ast)))?;
         }
         Def::Func { sig, body } => {
             // add args to env
@@ -129,14 +125,15 @@ fn check_def(def: &Def, env: &mut TypeEnv, ast: &Ast, tcx: &mut TypeContext) -> 
                 .map(|decl| {
                     env.resolve_type(decl.ty, tcx)
                         .map_err(|_| anyhow!(TypecheckError::UnknownAlias))
+                        .with_context(|| {
+                            format!(
+                                "failed to type check function `{}` argument `{}` type",
+                                sig.name.resolve_id(ast),
+                                decl.id.resolve_id(ast),
+                            )
+                        })
                 })
-                .collect::<Result<Vec<_>>>()
-                .with_context(|| {
-                    format!(
-                        "failed to type check command: function `{}` arg types resolution",
-                        sig.name.resolve_id(ast),
-                    )
-                })?;
+                .collect::<Result<Vec<_>>>()?;
 
             env.add_func(sig.name, tcx.get_func(resolved_arg_types, resolved_ret_ty))
                 .map_err(|_| TypecheckError::AlreadyBound)
@@ -323,7 +320,7 @@ fn check_command(
                             )?;
                         }
 
-                        for val in vals.as_slice(&ast.expr_lists).iter() {
+                        for val in vals.as_slice(&ast.expr_lists) {
                             let val_ty = check_expr(*val, env, ast, tcx).with_context(|| {
                                 format!(
                                     "failed to type check expression: array element for let binding `{}`",
@@ -563,7 +560,7 @@ fn check_command(
             let mut new_dims = Vec::new();
             for i in 0..view_dims.len() {
                 let arr_dim = match &tcx.types[arr_ty] {
-                    Type::Array { dims, .. } => dims[i].clone(),
+                    Type::Array { dims, .. } => dims[i],
                     _ => unreachable!(),
                 };
                 new_dims.push(
@@ -614,29 +611,31 @@ fn check_command(
                 })?;
             }
 
-            let split_dims = dims
-                .iter()
-                .zip(arr_dims.iter())
-                .try_fold(
-                    Vec::new(),
-                    |mut acc, (&split_dim, DimSpec { length, bank })| {
-                        if split_dim == 0 || bank % split_dim != 0 {
-                            return Err(anyhow!(TypecheckError::InvalidSplitFactor));
-                        }
-                        acc.push(DimSpec {
-                            length: split_dim,
-                            bank: split_dim,
-                        });
-                        acc.push(DimSpec {
-                            length: length / split_dim,
-                            bank: bank / split_dim,
-                        });
-                        Ok(acc)
-                    },
-                )
-                .with_context(|| {
-                    format!("failed to type check command: split {}", id.resolve_id(ast))
-                })?;
+            let split_dims = dims.iter().zip(arr_dims.iter()).enumerate().try_fold(
+                Vec::new(),
+                |mut acc, (i, (&split_dim, DimSpec { length, bank }))| {
+                    if split_dim == 0 || bank % split_dim != 0 {
+                        return Err(anyhow!(TypecheckError::InvalidSplitFactor)).with_context(
+                            || {
+                                format!(
+                                    "failed to type check command: split `{}` dimension {}",
+                                    id.resolve_id(ast),
+                                    i
+                                )
+                            },
+                        );
+                    }
+                    acc.push(DimSpec {
+                        length: split_dim,
+                        bank: split_dim,
+                    });
+                    acc.push(DimSpec {
+                        length: length / split_dim,
+                        bank: bank / split_dim,
+                    });
+                    Ok(acc)
+                },
+            )?;
 
             let view_ty = tcx.get_array(element_ty, split_dims, ports);
 
@@ -680,8 +679,7 @@ fn check_expr_(
                 .context("failed to type check expression: binary operator LHS")?;
             let t2 = check_expr(*right, env, ast, tcx)
                 .context("failed to type check expression: binary operator RHS")?;
-            Ok(check_binop(t1, t2, op.clone(), tcx)
-                .context("failed to type check binary operation")?)
+            Ok(check_binop(t1, t2, *op, tcx).context("failed to type check binary operation")?)
         }
         Expr::Application { func, args } => {
             let func_ty = env
@@ -781,20 +779,25 @@ fn check_expr_(
             indices
                 .as_slice(&ast.expr_lists)
                 .iter()
-                .try_for_each(|idx| -> Result<()> {
-                    let idx_ty = check_expr(*idx, env, ast, tcx)
-                        .context("failed to type check expression: array index")?;
+                .enumerate()
+                .try_for_each(|(i, idx)| -> Result<()> {
+                    let idx_ty = check_expr(*idx, env, ast, tcx).with_context(|| {
+                        format!(
+                            "failed to type check expression: array access `{}` index {}",
+                            array.resolve_id(ast),
+                            i
+                        )
+                    })?;
                     match &tcx.types[idx_ty] {
                         Type::StaticInt(..) | Type::Bit { .. } | Type::Index { .. } => Ok(()),
-                        _ => Err(anyhow!(TypecheckError::UnexpectedType))
-                            .context("failed to type check expression: array index"),
+                        _ => Err(anyhow!(TypecheckError::UnexpectedType)).with_context(|| {
+                            format!(
+                                "failed to type check expression: array access `{}` index {}",
+                                array.resolve_id(ast),
+                                i
+                            )
+                        }),
                     }
-                })
-                .with_context(|| {
-                    format!(
-                        "failed to type check expression: array access `{}` indices",
-                        array.resolve_id(ast)
-                    )
                 })?;
 
             Ok(element_ty)
@@ -886,11 +889,11 @@ fn check_view(
     ast: &Ast,
     tcx: &mut TypeContext,
 ) -> Result<DimSpec> {
-    if let Some(shrink) = view.shrink {
-        if shrink > arr_dim.bank || arr_dim.bank % shrink != 0 {
-            return Err(anyhow!(TypecheckError::InvalidShrinkWidth))
-                .context("failed to type check view: invalid shrink width");
-        }
+    if let Some(shrink) = view.shrink
+        && (shrink > arr_dim.bank || !arr_dim.bank.is_multiple_of(shrink))
+    {
+        return Err(anyhow!(TypecheckError::InvalidShrinkWidth))
+            .context("failed to type check view: invalid shrink width");
     }
 
     let new_bank = view.shrink.unwrap_or(arr_dim.bank);

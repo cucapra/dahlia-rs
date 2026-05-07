@@ -134,21 +134,21 @@ impl DahliaParser {
         ))
     }
 
-    fn expr_cast<'i, 'a>(input: Node<'i, 'a>) -> Result<ExprId> {
+    fn expr_cast(input: Node) -> Result<ExprId> {
         let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
             [expr(e), ty_atom(ty)] => context.borrow_mut().ast.exprs.push(Expr::Cast{expr: e, ty})
         ))
     }
 
-    fn rec_lit_field<'i, 'a>(input: Node<'i, 'a>) -> Result<(FieldId, ExprId)> {
+    fn rec_lit_field(input: Node) -> Result<(FieldId, ExprId)> {
         let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
             [iden(sym), expr(e)] => (context.borrow_mut().ast.get_field(sym), e)
         ))
     }
 
-    fn compound_literal<'i, 'a>(input: Node<'i, 'a>) -> Result<ExprId> {
+    fn compound_literal(input: Node) -> Result<ExprId> {
         let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
             [rec_lit_field(fields)..] => context.borrow_mut().ast.exprs.push(Expr::RecordLiteral(fields.into_iter().collect())),
@@ -160,7 +160,7 @@ impl DahliaParser {
         ))
     }
 
-    fn array_access<'i, 'a>(input: Node<'i, 'a>) -> Result<ExprId> {
+    fn array_access(input: Node) -> Result<ExprId> {
         let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
             [iden(sym), expr(indices)..] => {
@@ -172,7 +172,7 @@ impl DahliaParser {
         ))
     }
 
-    fn rational<'i, 'a>(input: Node<'i, 'a>) -> Result<ExprId> {
+    fn rational(input: Node) -> Result<ExprId> {
         let context = *input.user_data();
         Ok(context
             .borrow_mut()
@@ -181,7 +181,7 @@ impl DahliaParser {
             .push(Expr::RationalLiteral(input.as_str().to_string())))
     }
 
-    fn hex<'i, 'a>(input: Node<'i, 'a>) -> Result<ExprId> {
+    fn hex(input: Node) -> Result<ExprId> {
         let context = *input.user_data();
         Ok(context.borrow_mut().ast.exprs.push(Expr::IntLiteral {
             value: i64::from_str_radix(input.as_str().trim_start_matches("0x"), 16)
@@ -190,7 +190,7 @@ impl DahliaParser {
         }))
     }
 
-    fn octal<'i, 'a>(input: Node<'i, 'a>) -> Result<ExprId> {
+    fn octal(input: Node) -> Result<ExprId> {
         let context = *input.user_data();
         Ok(context.borrow_mut().ast.exprs.push(Expr::IntLiteral {
             value: i64::from_str_radix(input.as_str().trim_start_matches("0"), 8)
@@ -199,7 +199,7 @@ impl DahliaParser {
         }))
     }
 
-    fn uint<'i, 'a>(input: Node<'i, 'a>) -> Result<ExprId> {
+    fn uint(input: Node) -> Result<ExprId> {
         let context = *input.user_data();
         Ok(context.borrow_mut().ast.exprs.push(Expr::IntLiteral {
             value: input.as_str().parse().expect("Invalid integer literal"),
@@ -207,7 +207,7 @@ impl DahliaParser {
         }))
     }
 
-    fn boolean<'i, 'a>(input: Node<'i, 'a>) -> Result<ExprId> {
+    fn boolean(input: Node) -> Result<ExprId> {
         let context = *input.user_data();
         match input.as_str() {
             "true" => Ok(context.borrow_mut().ast.exprs.push(Expr::BoolLiteral(true))),
@@ -220,7 +220,7 @@ impl DahliaParser {
         }
     }
 
-    fn app<'i, 'a>(input: Node<'i, 'a>) -> Result<ExprId> {
+    fn app(input: Node) -> Result<ExprId> {
         let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
             [iden(sym)] => {
@@ -237,7 +237,7 @@ impl DahliaParser {
         ))
     }
 
-    fn primary<'i, 'a>(input: Node<'i, 'a>) -> Result<ExprId> {
+    fn primary(input: Node) -> Result<ExprId> {
         let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
             [expr_cast(e)] => e,
@@ -258,7 +258,7 @@ impl DahliaParser {
         ))
     }
 
-    fn atom<'i, 'a>(input: Node<'i, 'a>) -> Result<ExprId> {
+    fn atom(input: Node) -> Result<ExprId> {
         let context = *input.user_data();
         match_nodes!(input.into_children();
             [primary(e)] => Ok(e),
@@ -270,7 +270,7 @@ impl DahliaParser {
         )
     }
 
-    fn expr<'i, 'a>(input: Node<'i, 'a>) -> Result<ExprId> {
+    fn expr(input: Node) -> Result<ExprId> {
         let context = *input.user_data();
         PRATT_PARSER
             .map_primary(|primary| match primary.as_rule() {
@@ -308,7 +308,7 @@ impl DahliaParser {
             .parse(input.into_pair().into_inner())
     }
 
-    fn let_stmt<'i, 'a>(input: Node<'i, 'a>) -> Result<CommandId> {
+    fn let_stmt(input: Node) -> Result<CommandId> {
         let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
             [iden(sym), ty(ty), expr(value)] => {
@@ -364,7 +364,7 @@ impl DahliaParser {
         ))
     }
 
-    fn update<'i, 'a>(input: Node<'i, 'a>) -> Result<CommandId> {
+    fn update(input: Node) -> Result<CommandId> {
         let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
             [expr(lhs), assign_op(op), expr(rhs)] => context.borrow_mut().ast.commands.push(Command::Update{lhs, op, rhs})
@@ -375,7 +375,7 @@ impl DahliaParser {
         Ok(())
     }
 
-    fn view_suffix<'i, 'a>(input: Node<'i, 'a>) -> Result<Suffix> {
+    fn view_suffix(input: Node) -> Result<Suffix> {
         let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
             [view_suffix_underscore(_)] => Suffix::Rotation(context.borrow_mut().ast.exprs.push(Expr::IntLiteral { value: 0, base: 10 })),
@@ -398,13 +398,13 @@ impl DahliaParser {
         ))
     }
 
-    fn view_param<'i, 'a>(input: Node<'i, 'a>) -> Result<View> {
+    fn view_param(input: Node) -> Result<View> {
         Ok(match_nodes!(input.into_children();
             [view_suffix(suffix), view_prefix_opt(prefix), view_shrink_opt(shrink)] => View{prefix, suffix, shrink}
         ))
     }
 
-    fn view<'i, 'a>(input: Node<'i, 'a>) -> Result<CommandId> {
+    fn view(input: Node) -> Result<CommandId> {
         let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
             [iden(id_sym), iden(arr_sym), view_param(dims)..] => {
@@ -422,7 +422,7 @@ impl DahliaParser {
         ))
     }
 
-    fn split<'i, 'a>(input: Node<'i, 'a>) -> Result<CommandId> {
+    fn split(input: Node) -> Result<CommandId> {
         let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
             [iden(id_sym), iden(arr_sym), split_factor(dims)..] => {
@@ -434,14 +434,14 @@ impl DahliaParser {
         ))
     }
 
-    fn r#return<'i, 'a>(input: Node<'i, 'a>) -> Result<CommandId> {
+    fn r#return(input: Node) -> Result<CommandId> {
         let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
             [expr(e)] => context.borrow_mut().ast.commands.push(Command::Return(e)),
         ))
     }
 
-    fn simple_cmd<'i, 'a>(input: Node<'i, 'a>) -> Result<CommandId> {
+    fn simple_cmd(input: Node) -> Result<CommandId> {
         let context = *input.user_data();
         match_nodes!(input.into_children();
             [let_stmt(cmd)] => Ok(cmd),
@@ -453,27 +453,27 @@ impl DahliaParser {
         )
     }
 
-    fn cmd<'i, 'a>(input: Node<'i, 'a>) -> Result<CommandId> {
+    fn cmd(input: Node) -> Result<CommandId> {
         let context = *input.user_data();
         match_nodes!(input.into_children();
             [par_cmd(c)..] => Ok(Command::smart_seq(c.into_iter().collect(), context)),
         )
     }
 
-    fn block<'i, 'a>(input: Node<'i, 'a>) -> Result<Command> {
+    fn block(input: Node) -> Result<Command> {
         Ok(match_nodes!(input.into_children();
             [cmd(c)] => Command::Block(c),
         ))
     }
 
-    fn else_block<'i, 'a>(input: Node<'i, 'a>) -> Result<Option<CommandId>> {
+    fn else_block(input: Node) -> Result<Option<CommandId>> {
         Ok(match_nodes!(input.into_children();
             [block(cmd)] => Some(unwrap_block(cmd)),
             [] => None
         ))
     }
 
-    fn if_else<'i, 'a>(input: Node<'i, 'a>) -> Result<CommandId> {
+    fn if_else(input: Node) -> Result<CommandId> {
         let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
             [expr(cond), block(then), else_block(else_)] => {
@@ -505,7 +505,7 @@ impl DahliaParser {
         ))
     }
 
-    fn while_loop<'i, 'a>(input: Node<'i, 'a>) -> Result<CommandId> {
+    fn while_loop(input: Node) -> Result<CommandId> {
         let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
             [expr(cond), block(body)] => context.borrow_mut().ast.commands.push(Command::While{cond, pipeline:false, body:unwrap_block(body)}),
@@ -535,7 +535,7 @@ impl DahliaParser {
         ))
     }
 
-    fn combine_block<'i, 'a>(input: Node<'i, 'a>) -> Result<CommandId> {
+    fn combine_block(input: Node) -> Result<CommandId> {
         let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
             [block(cmd)] => unwrap_block(cmd),
@@ -547,34 +547,34 @@ impl DahliaParser {
         Ok(input.as_str().trim_matches('"').to_string())
     }
 
-    fn decor<'i, 'a>(input: Node<'i, 'a>) -> Result<CommandId> {
+    fn decor(input: Node) -> Result<CommandId> {
         let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
             [string_val(value)] => context.borrow_mut().ast.commands.push(Command::Decorate(value))
         ))
     }
 
-    fn decors<'i, 'a>(input: Node<'i, 'a>) -> Result<Vec<CommandId>> {
+    fn decors(input: Node) -> Result<Vec<CommandId>> {
         Ok(match_nodes!(input.into_children();
             [decor(decs)..] => decs.into_iter().collect()
         ))
     }
 
-    fn for_loop<'i, 'a>(input: Node<'i, 'a>) -> Result<CommandId> {
+    fn for_loop(input: Node) -> Result<CommandId> {
         let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
             [for_range(range), pipeline(pipeline), block(body), combine_block(combine)] => context.borrow_mut().ast.commands.push(Command::For{range, pipeline, body:unwrap_block(body), combine}),
         ))
     }
 
-    fn par_cmd_item<'i, 'a>(input: Node<'i, 'a>) -> Result<CommandId> {
+    fn par_cmd_item(input: Node) -> Result<CommandId> {
         match_nodes!(input.into_children();
             [block_cmd(c)] => Ok(c),
             [simple_cmd(c)] => Ok(c)
         )
     }
 
-    fn par_cmd<'i, 'a>(input: Node<'i, 'a>) -> Result<CommandId> {
+    fn par_cmd(input: Node) -> Result<CommandId> {
         let context = *input.user_data();
         match_nodes!(input.into_children();
             [par_cmd_item(c)..] => Ok(Command::smart_par(c.into_iter().collect(), context))
@@ -597,7 +597,7 @@ impl DahliaParser {
         ))
     }
 
-    fn func_def<'i, 'a>(input: Node<'i, 'a>) -> Result<Def> {
+    fn func_def(input: Node) -> Result<Def> {
         let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
             [iden(name_sym), func_args(args), ty(ret_ty), block(body)] => {
@@ -623,7 +623,7 @@ impl DahliaParser {
         ))
     }
 
-    fn record_def<'i, 'a>(input: Node<'i, 'a>) -> Result<Def> {
+    fn record_def(input: Node) -> Result<Def> {
         let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
             [iden(name_sym), rec_field_defs(fields)] => {
@@ -633,14 +633,14 @@ impl DahliaParser {
         ))
     }
 
-    fn def<'i, 'a>(input: Node<'i, 'a>) -> Result<Def> {
+    fn def(input: Node) -> Result<Def> {
         match_nodes!(input.into_children();
             [func_def(def)] => Ok(def),
             [record_def(def)] => Ok(def)
         )
     }
 
-    fn defs<'i, 'a>(input: Node<'i, 'a>) -> Result<Vec<Def>> {
+    fn defs(input: Node) -> Result<Vec<Def>> {
         Ok(match_nodes!(input.into_children();
             [def(defs)..] => defs.into_iter().collect()
         ))
@@ -656,7 +656,7 @@ impl DahliaParser {
         ))
     }
 
-    fn block_cmd<'i, 'a>(input: Node<'i, 'a>) -> Result<CommandId> {
+    fn block_cmd(input: Node) -> Result<CommandId> {
         let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
             [block(c)] => context.borrow_mut().ast.commands.push(c),
@@ -667,7 +667,7 @@ impl DahliaParser {
         ))
     }
 
-    fn prog_cmd<'i, 'a>(input: Node<'i, 'a>) -> Result<CommandId> {
+    fn prog_cmd(input: Node) -> Result<CommandId> {
         let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
             [cmd(cmd)] => cmd,
@@ -741,7 +741,7 @@ impl DahliaParser {
         ))
     }
 
-    fn prog<'i, 'a>(input: Node<'i, 'a>) -> Result<Program> {
+    fn prog(input: Node) -> Result<Program> {
         let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
             [includes(includes), defs(defs), decors(decors), decls(decls), prog_cmd(cmd), EOI(_)] => {

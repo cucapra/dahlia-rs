@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 
 use crate::{
     ast::{FuncId, RecordId, Type, TypeContext, TypeId},
@@ -21,20 +22,22 @@ impl TypeEnv {
     }
 
     pub fn add_func(&mut self, id: FuncId, type_id: TypeId) -> Result<(), TypeEnvError> {
-        if self.func_map.contains_key(&id) {
-            Err(TypeEnvError::AlreadyBound)
-        } else {
-            self.func_map.insert(id, type_id);
-            Ok(())
+        match self.func_map.entry(id) {
+            Entry::Occupied(_) => Err(TypeEnvError::AlreadyBound),
+            Entry::Vacant(slot) => {
+                slot.insert(type_id);
+                Ok(())
+            }
         }
     }
 
     pub fn add_record(&mut self, id: RecordId, type_id: TypeId) -> Result<(), TypeEnvError> {
-        if self.record_map.contains_key(&id) {
-            Err(TypeEnvError::AlreadyBound)
-        } else {
-            self.record_map.insert(id, type_id);
-            Ok(())
+        match self.record_map.entry(id) {
+            Entry::Occupied(_) => Err(TypeEnvError::AlreadyBound),
+            Entry::Vacant(slot) => {
+                slot.insert(type_id);
+                Ok(())
+            }
         }
     }
 
@@ -63,7 +66,7 @@ impl TypeEnv {
         match r#type {
             Type::Func { args, ret } => {
                 let resolved_args: Vec<TypeId> =
-                    args.as_slice(&tcx.type_lists).iter().copied().collect();
+                    args.as_slice(&tcx.type_lists).to_vec();
                 let resolved_args = resolved_args
                     .into_iter()
                     .map(|arg| self.resolve_type(arg, tcx))

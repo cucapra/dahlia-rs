@@ -271,35 +271,36 @@ pub enum TypeKey {
 
 impl TypeContext {
     pub fn get_float(&mut self) -> TypeId {
-        self.type_map
+        *self
+            .type_map
             .entry(TypeKey::Float)
             .or_insert_with(|| self.types.push(Type::Float))
-            .clone()
     }
 
     pub fn get_double(&mut self) -> TypeId {
-        self.type_map
+        *self
+            .type_map
             .entry(TypeKey::Double)
             .or_insert_with(|| self.types.push(Type::Double))
-            .clone()
     }
 
     pub fn get_bool(&mut self) -> TypeId {
-        self.type_map
+        *self
+            .type_map
             .entry(TypeKey::Bool)
             .or_insert_with(|| self.types.push(Type::Bool))
-            .clone()
     }
 
     pub fn get_bit(&mut self, length: usize, unsigned: bool) -> TypeId {
-        self.type_map
+        *self
+            .type_map
             .entry(TypeKey::Bit { length, unsigned })
             .or_insert_with(|| self.types.push(Type::Bit { length, unsigned }))
-            .clone()
     }
 
     pub fn get_fixed(&mut self, length_total: usize, length_int: usize, unsigned: bool) -> TypeId {
-        self.type_map
+        *self
+            .type_map
             .entry(TypeKey::Fixed {
                 length_total,
                 length_int,
@@ -312,18 +313,18 @@ impl TypeContext {
                     unsigned,
                 })
             })
-            .clone()
     }
 
     pub fn get_alias(&mut self, name: RecordId) -> TypeId {
-        self.type_map
-            .entry(TypeKey::Alias(name.clone()))
+        *self
+            .type_map
+            .entry(TypeKey::Alias(name))
             .or_insert_with(|| self.types.push(Type::Alias(name)))
-            .clone()
     }
 
     pub fn get_array(&mut self, element_type: TypeId, dims: Vec<DimSpec>, ports: usize) -> TypeId {
-        self.type_map
+        *self
+            .type_map
             .entry(TypeKey::Array {
                 element_type,
                 dims: dims.clone(),
@@ -336,39 +337,39 @@ impl TypeContext {
                     ports,
                 })
             })
-            .clone()
     }
 
     pub fn get_static_int(&mut self, value: i64) -> TypeId {
-        self.type_map
+        *self
+            .type_map
             .entry(TypeKey::StaticInt(value))
             .or_insert_with(|| self.types.push(Type::StaticInt(value)))
-            .clone()
     }
 
     pub fn get_index(&mut self, static_: (i64, i64), dynamic: (i64, i64)) -> TypeId {
-        self.type_map
+        *self
+            .type_map
             .entry(TypeKey::Index { static_, dynamic })
             .or_insert_with(|| self.types.push(Type::Index { static_, dynamic }))
-            .clone()
     }
 
     pub fn get_void(&mut self) -> TypeId {
-        self.type_map
+        *self
+            .type_map
             .entry(TypeKey::Void)
             .or_insert_with(|| self.types.push(Type::Void))
-            .clone()
     }
 
     pub fn get_rational(&mut self, value: String) -> TypeId {
-        self.type_map
+        *self
+            .type_map
             .entry(TypeKey::Rational(value.clone()))
             .or_insert_with(|| self.types.push(Type::Rational(value)))
-            .clone()
     }
 
     pub fn get_func(&mut self, args: Vec<TypeId>, ret: TypeId) -> TypeId {
-        self.type_map
+        *self
+            .type_map
             .entry(TypeKey::Func {
                 args: args.clone(),
                 ret,
@@ -379,20 +380,19 @@ impl TypeContext {
                     ret,
                 })
             })
-            .clone()
     }
 
     pub fn get_rec_type(&mut self, name: RecordId, fields: HashMap<FieldId, TypeId>) -> TypeId {
-        let mut field_key: Vec<_> = fields.iter().map(|(k, v)| (k.clone(), *v)).collect();
+        let mut field_key: Vec<_> = fields.iter().map(|(k, v)| (*k, *v)).collect();
         field_key.sort();
 
-        self.type_map
+        *self
+            .type_map
             .entry(TypeKey::RecType {
-                name: name.clone(),
+                name,
                 fields: field_key,
             })
             .or_insert_with(|| self.types.push(Type::RecType { name, fields }))
-            .clone()
     }
 }
 
@@ -402,7 +402,7 @@ pub struct DimSpec {
     pub bank: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum InfixOp {
     Mul,
     Div,
