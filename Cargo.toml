@@ -14,3 +14,4 @@ pest_derive = "2.8.6"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 indexmap = "2.14.0"
+pretty = "0.12"

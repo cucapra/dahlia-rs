@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 
 use dahlia_rs::{
-    ast::Context, ast_debug::ast_debug, parser::parse_dahlia, resolver::resolve_names,
+    ast::Context, parser::parse_dahlia, pretty::pretty_program, resolver::resolve_names,
     typecheck::typecheck,
 };
 
@@ -47,12 +47,12 @@ let d: ubit<32> = sqrt(c);
     let source = r###"
 // record point { x: bit<32>; y: bit<32> }
 // let p: point = {x = 1; y = 2 };
-// record point { x: bit<32>; y: bit<32> }
-//           let p: point = {x = 1; y = 2 };
-//           let f: bit<32> = p.x;
-record point { x: ubit<32> }
-let a: point = {x=10};
-let b: point = (a as point);
+record point { x: bit<32>; y: bit<32> }
+          let p: point = {x = 1; y = 2 };
+          let f: bit<32> = p.x;
+// record point { x: ubit<32> }
+// let a: point = {x=10};
+// let b: point = (a as point);
     "###;
     let context = RefCell::new(Context::new());
     let program = parse_dahlia(source, &context)?;
@@ -61,7 +61,8 @@ let b: point = (a as point);
 
     resolve_names(&program, &mut context)?;
     typecheck(&program, &mut context)?;
-    ast_debug(&context, &program);
+    // ast_debug(&context, &program);
+    println!("{}", pretty_program(&program, &context));
 
     Ok(())
 }
