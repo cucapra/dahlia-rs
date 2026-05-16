@@ -1,5 +1,6 @@
 pub mod ast;
 pub mod ast_debug;
+pub mod calyx_backend;
 pub mod errors;
 pub mod parser;
 pub mod pretty;

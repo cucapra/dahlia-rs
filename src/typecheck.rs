@@ -135,11 +135,13 @@ fn check_def(def: &Def, env: &mut TypeEnv, ast: &Ast, tcx: &mut TypeContext) -> 
                 })
                 .collect::<Result<Vec<_>>>()?;
 
-            env.add_func(sig.name, tcx.get_func(resolved_arg_types, resolved_ret_ty))
+            let fn_type = tcx.get_func(resolved_arg_types, resolved_ret_ty);
+            env.add_func(sig.name, fn_type)
                 .map_err(|_| TypecheckError::AlreadyBound)
                 .with_context(|| {
                     format!("function `{}` already bound", sig.name.resolve_id(ast))
                 })?;
+            tcx.func_type_map.insert(sig.name, fn_type);
         }
     }
     Ok(())
