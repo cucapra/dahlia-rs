@@ -223,8 +223,10 @@ fn check_command(
             pipeline,
             body,
         } => {
-            check_pipeline(*pipeline, *body, ast)
-                .context("failed to type check command: while pipeline")?;
+            check_pipeline(*pipeline, *body, ast).context(format!(
+                "failed to type check command: while pipeline {}",
+                *pipeline
+            ))?;
 
             let cond_ty = check_expr(*cond, env, ast, tcx)
                 .context("failed to type check expression: while condition")?;

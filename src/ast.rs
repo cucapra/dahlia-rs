@@ -18,6 +18,7 @@ entity_impl!(Symbol, "symbol");
 
 pub trait IdResolve {
     fn resolve_id<'a>(&self, ast: &'a Ast) -> &'a str;
+    fn get_name(&self) -> String;
 }
 
 #[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord, Default)]
@@ -29,6 +30,10 @@ impl IdResolve for FuncId {
         ast.symbols
             .get(*ast.funcs.get(*self).expect("Function ID not found"))
             .expect("symbol not found")
+    }
+
+    fn get_name(&self) -> String {
+        format!("fn_{}", self.as_u32())
     }
 }
 
@@ -42,6 +47,10 @@ impl IdResolve for ValueId {
             .get(*ast.values.get(*self).expect("Value ID not found"))
             .expect("symbol not found")
     }
+
+    fn get_name(&self) -> String {
+        format!("v_{}", self.as_u32())
+    }
 }
 
 #[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord, Default)]
@@ -54,6 +63,10 @@ impl IdResolve for RecordId {
             .get(*ast.records.get(*self).expect("Record ID not found"))
             .expect("symbol not found")
     }
+
+    fn get_name(&self) -> String {
+        format!("rec_{}", self.as_u32())
+    }
 }
 
 #[derive(Clone, Copy, Hash, Eq, PartialEq, PartialOrd, Ord, Default)]
@@ -65,6 +78,10 @@ impl IdResolve for FieldId {
         ast.symbols
             .get(*ast.fields.get(*self).expect("Field ID not found"))
             .expect("symbol not found")
+    }
+
+    fn get_name(&self) -> String {
+        format!("field_{}", self.as_u32())
     }
 }
 

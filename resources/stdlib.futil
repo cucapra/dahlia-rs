@@ -1,3 +1,9 @@
 import "primitives/core.futil";
 import "primitives/memories/seq.futil";
 import "primitives/binary_operators.futil";
+
+component main() -> () {
+  cells {}
+  wires {}
+  control {}
+}

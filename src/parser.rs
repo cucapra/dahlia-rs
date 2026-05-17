@@ -508,8 +508,7 @@ impl DahliaParser {
     fn while_loop(input: Node) -> Result<CommandId> {
         let context = *input.user_data();
         Ok(match_nodes!(input.into_children();
-            [expr(cond), block(body)] => context.borrow_mut().ast.commands.push(Command::While{cond, pipeline:false, body:unwrap_block(body)}),
-            [expr(cond), pipeline(_), block(body)] => context.borrow_mut().ast.commands.push(Command::While{cond, pipeline:true, body:unwrap_block(body)}),
+            [expr(cond), pipeline(p), block(body)] => context.borrow_mut().ast.commands.push(Command::While{cond, pipeline:p, body:unwrap_block(body)}),
         ))
     }
 

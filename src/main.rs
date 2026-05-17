@@ -4,7 +4,12 @@ use anyhow::{Result, anyhow};
 use calyx_frontend::Workspace;
 use calyx_ir::{self as ir, Printer};
 use dahlia_rs::{
-    ast::{Command, Context, Expr}, calyx_backend::emit_calyx, parser::parse_dahlia, pretty::pretty_program, resolver::resolve_names, typecheck::typecheck
+    ast::{Command, Context, Expr},
+    calyx_backend::emit_calyx,
+    parser::parse_dahlia,
+    pretty::pretty_program,
+    resolver::resolve_names,
+    typecheck::typecheck,
 };
 
 fn main() -> Result<()> {
@@ -49,12 +54,44 @@ let d: ubit<32> = sqrt(c);
     let source = r###"
 // record point { x: bit<32>; y: bit<32> }
 // let p: point = {x = 1; y = 2 };
-record point { x: bit<32>; y: bit<32> }
-          let p: point = {x = 1; y = 2 };
-          let f: bit<32> = p.x;
+// record point { x: bit<32>; y: bit<32> }
+//           let p: point = {x = 1; y = 2 };
+//           let f: bit<32> = p.x;
 // record point { x: ubit<32> }
 // let a: point = {x=10};
 // let b: point = (a as point);
+
+def foo(a: ubit<32>, b: ubit<32>[4][4]): ubit<32> = {
+  let temp: ubit<32> = a;
+  return temp;
+}
+
+decl a: fix<32,16>[2][2];
+decl b: fix<32,16>[2][2];
+decl result: fix<32,16>[2][2];
+decl foo: bool;
+decl bar: bit<8>;
+decl baz: fix<16,8>[4][8][16];
+{
+  let i: bit<1> = (0 as bit<1>);
+  ---
+  /* @bound(2) */ while ((i <= (1 as bit<1>))) {
+    {
+      let j: bit<1> = (0 as bit<1>);
+      ---
+      /* @bound(2) */ while ((j <= (1 as bit<1>))) {
+        let a_read0_: fix<32,16> = a[(i as ubit<2>)][(j as ubit<2>)];
+        let b_read0_: fix<32,16> = b[(i as ubit<2>)][(j as ubit<2>)];
+        ---
+        result[(i as ubit<2>)][(j as ubit<2>)] := (a_read0_ + b_read0_);
+        ---
+        j := (j + (1 as bit<1>));
+      }
+    }
+    ---
+    i := (i + (1 as bit<1>));
+  }
+}
     "###;
     let dahlia_ctx = RefCell::new(Context::new());
     let program = parse_dahlia(source, &dahlia_ctx)?;
@@ -69,17 +106,17 @@ record point { x: bit<32>; y: bit<32> }
     // should point to the root of the cloned Calyx repo
     let calyx_root = env::var("CALYX_ROOT").expect("CALYX_ROOT environment variable not set");
 
-    let ws = Workspace::construct(
-        &Some("resources/stdlib.futil".into()),
-        &Path::new(&calyx_root),
-    )
-    .map_err(|e| anyhow!("failed to construct Calyx workspace {:?}", e))?;
-    let mut calyx_ast = ir::from_ast::ast_to_ir(ws)
+    let ws = Workspace::construct(&Some("resources/stdlib.futil".into()), &[calyx_root.into()])
+        .map_err(|e| anyhow!("failed to construct Calyx workspace {:?}", e))?;
+    let mut calyx_ast = ir::from_ast::ast_to_ir(ws, ir::from_ast::AstConversionConfig::default())
         .map_err(|e| anyhow!("failed to convert Calyx AST to IR: {:?}", e))?;
 
-    emit_calyx(&program , &mut calyx_ast, &dahlia_ctx)?;
+    // ugly workaround, probably need a better way to populate Calyx primitives
+    calyx_ast.components.pop();
 
-    Printer::write_context(&calyx_ast, false, &mut std::io::stdout())
+    emit_calyx(&program, &mut calyx_ast, &dahlia_ctx)?;
+
+    Printer::write_context(&calyx_ast, true, &mut std::io::stdout())
         .map_err(|e| anyhow!("failed to print Calyx IR: {:?}", e))?;
 
     Ok(())
