@@ -306,7 +306,110 @@ fn emit_command(
                 }
             }
         }
-        _ => todo!(),
+        Command::Expr(expr) => {
+            if let Expr::Application { func, args } = &ast.exprs[*expr] {
+                let (_, assignments, invoke_control) =
+                    emit_invoke(*func, *args, env, builder, ast, tcx).with_context(|| {
+                        format!(
+                            "failed to emit function application for {}",
+                            func.resolve_id(ast)
+                        )
+                    })?;
+                builder.add_continuous_assignments(assignments);
+                Ok(invoke_control)
+            } else {
+                bail!("Unsupported expression command")
+            }
+        }
+        Command::Update { lhs, op, rhs } => {
+            todo!()
+        }
+        Command::IfElse { cond, then, else_ } => {
+            let cond_out = emit_expr(*cond, env, builder, ast, tcx)
+                .context("failed to emit condition for if command")?;
+
+            let then_control = emit_command(*then, env, builder, ast, tcx)
+                .context("failed to emit then branch")?;
+            let else_control = emit_command(*else_, env, builder, ast, tcx)
+                .context("failed to emit else branch")?;
+
+            if let Some(done) = cond_out.done {
+                let group = builder.add_group("cond");
+
+                let cond_done = group.borrow().get("done");
+                group.borrow_mut().assignments = cond_out.assignments;
+                group
+                    .borrow_mut()
+                    .assignments
+                    .push(builder.build_assignment(cond_done, done, Guard::True));
+
+                Ok(Control::seq(vec![
+                    Control::enable(group),
+                    Control::if_(
+                        cond_out.output,
+                        None,
+                        then_control.into(),
+                        else_control.into(),
+                    ),
+                ]))
+            } else {
+                let group = builder.add_comb_group("cond");
+
+                group.borrow_mut().assignments = cond_out.assignments;
+
+                Ok(Control::if_(
+                    cond_out.output,
+                    Some(group),
+                    then_control.into(),
+                    else_control.into(),
+                ))
+            }
+        }
+        Command::Decorate(..) | Command::Empty => Ok(Control::empty()),
+        Command::For { .. } => {
+            bail!("For loops should have been lowered")
+        }
+        Command::While { cond, body, .. } => {
+            let body_control = emit_command(*body, env, builder, ast, tcx)
+                .context("failed to emit while loop body")?;
+
+            let cond_out = emit_expr(*cond, env, builder, ast, tcx)
+                .context("failed to emit condition for while loop")?;
+
+            if cond_out.done.is_some() {
+                bail!("While loop conditions should be combinatorial");
+            }
+
+            let group = builder.add_comb_group("cond");
+            group.borrow_mut().assignments = cond_out.assignments;
+
+            Ok(Control::while_(
+                cond_out.output,
+                Some(group),
+                body_control.into(),
+            ))
+        }
+        Command::Return(expr) => {
+            if let Expr::Id(_) = &ast.exprs[*expr] {
+                let mut out = emit_expr(*expr, env, builder, ast, tcx)
+                    .context("failed to emit return expression")?;
+
+                let this_out = builder.component.signature.borrow().get("out");
+                let out_out = out.output;
+
+                let assign = builder.build_assignment(this_out, out_out, Guard::True);
+                out.assignments.push(assign);
+
+                builder.add_continuous_assignments(out.assignments);
+
+                Ok(Control::empty())
+            } else {
+                bail!("Can only return a variable")
+            }
+        }
+        Command::View { .. } | Command::Split { .. } => {
+            bail!("View and Split should have been lowered")
+        }
     }
 }
 
