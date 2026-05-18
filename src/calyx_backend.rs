@@ -1,15 +1,20 @@
 use anyhow::Context;
 use anyhow::Result;
-use anyhow::anyhow;
 use anyhow::bail;
 use calyx_ir::Attributes;
 use calyx_ir::BoolAttr;
 use calyx_ir::Component;
+use calyx_ir::Id;
+use calyx_ir::Invoke;
 use calyx_ir::PortDef;
 use calyx_ir::{Builder, Cell, Control, Port, RRC};
+use cranelift_entity::EntityList;
 use indexmap::IndexMap;
 
+use crate::ast::Command;
 use crate::ast::DimSpec;
+use crate::ast::Expr;
+use crate::ast::FuncId;
 use crate::ast::IdResolve;
 use crate::ast::Type;
 use crate::ast::TypeId;
@@ -31,7 +36,13 @@ enum Structure {
     Port(RRC<Port>),
 }
 
-type Env = IndexMap<ValueId, Structure>;
+#[derive(Default)]
+struct Env {
+    value_map: IndexMap<ValueId, Structure>,
+    func_port_map: IndexMap<FuncId, Vec<PortDef<u64>>>,
+    // refcell / port Id, is refcell?
+    func_arg_map: IndexMap<FuncId, Vec<(Id, bool)>>,
+}
 
 fn bits_for_type(ty: TypeId, tcx: &TypeContext) -> (u64, Option<u64>) {
     match &tcx.types[ty] {
@@ -48,13 +59,47 @@ fn bits_for_type(ty: TypeId, tcx: &TypeContext) -> (u64, Option<u64>) {
 }
 
 fn emit_invoke(
-    app: ExprId,
+    func: FuncId,
+    args: EntityList<ExprId>,
     env: &mut Env,
     builder: &mut Builder,
     ast: &Ast,
     tcx: &TypeContext,
-) -> Result<(Cell, Vec<Assignment>, Control)> {
-    todo!()
+) -> Result<(RRC<Cell>, Vec<Assignment>, Control)> {
+    let comp = builder.add_component("invoke", &func.get_name(), env.func_port_map[&func].clone());
+
+    let mut assignments = Vec::new();
+    let mut inputs = Vec::new();
+    let mut ref_cells = Vec::new();
+
+    for (i, arg) in args.as_slice(&ast.expr_lists).iter().enumerate() {
+        let emit_output = emit_expr(*arg, env, builder, ast, tcx).with_context(|| {
+            format!(
+                "failed to emit arg for function application {}",
+                func.resolve_id(ast)
+            )
+        })?;
+        let (id, is_refcell) = &env.func_arg_map[&func][i];
+
+        assignments.extend(emit_output.assignments.into_iter());
+
+        if *is_refcell {
+            ref_cells.push((id.clone(), emit_output.output.borrow_mut().cell_parent()));
+        } else {
+            inputs.push((id.clone(), emit_output.output));
+        }
+    }
+
+    let invoke_control = Control::Invoke(Invoke {
+        attributes: Attributes::default(),
+        comp: comp.clone(),
+        inputs,
+        outputs: vec![],
+        comb_group: None,
+        ref_cells,
+    });
+
+    Ok((comp, assignments, invoke_control))
 }
 
 fn emit_lvalue(
@@ -84,8 +129,185 @@ fn emit_command(
     ast: &Ast,
     tcx: &TypeContext,
 ) -> Result<Control> {
-    Ok(Control::empty())
-    // todo!()
+    match &ast.commands[cmd] {
+        Command::Block(cmd) => {
+            Ok(emit_command(*cmd, env, builder, ast, tcx)
+                .context("failed to emit block command")?)
+        }
+        Command::Par(cmds) => Ok(Control::par(
+            cmds.iter()
+                .map(|cmd| emit_command(*cmd, env, builder, ast, tcx))
+                .collect::<Result<Vec<_>>>()
+                .context("failed to emit parallel command")?,
+        )),
+        Command::Seq(cmds) => Ok(Control::seq(
+            cmds.iter()
+                .map(|cmd| emit_command(*cmd, env, builder, ast, tcx))
+                .collect::<Result<Vec<_>>>()
+                .context("failed to emit seq command")?,
+        )),
+        Command::Let { id, value, .. } => {
+            match (
+                &tcx.types[tcx.value_type_map[id]],
+                value.map(|value| &ast.exprs[value]),
+            ) {
+                (
+                    Type::Array {
+                        element_type,
+                        dims,
+                        ports,
+                    },
+                    None,
+                ) => {
+                    let structure = emit_array_decl(element_type, dims, ports, false, builder, tcx)
+                        .with_context(|| {
+                            format!("failed to emit let binding `{}`", id.resolve_id(ast))
+                        })?;
+                    env.value_map.insert(*id, structure);
+                    Ok(Control::empty())
+                }
+                (Type::Array { .. }, Some(_)) => {
+                    bail!("Calyx backend does not support array initializers");
+                }
+                (_, Some(Expr::Application { func, args })) => {
+                    let (cell, assigns, invoke_control) =
+                        emit_invoke(*func, *args, env, builder, ast, tcx).with_context(|| {
+                            format!("failed to emit let binding `{}`", id.resolve_id(ast))
+                        })?;
+
+                    let (width, _) = bits_for_type(tcx.value_type_map[id], tcx);
+
+                    let reg = builder.add_primitive("reg", "std_reg", &[width]);
+
+                    let group = builder.add_group("let_invoke");
+
+                    let reg_in = reg.borrow().get("in");
+                    let invoke_out = cell.borrow().get("out");
+
+                    let reg_write_en = reg.borrow().get("write_en");
+                    let const_1 = builder.add_constant(1, 1).borrow().get("out");
+
+                    let group_done = group.borrow().get("done");
+                    let reg_done = reg.borrow().get("done");
+
+                    group
+                        .borrow_mut()
+                        .assignments
+                        .push(builder.build_assignment(reg_in, invoke_out, Guard::True));
+                    group
+                        .borrow_mut()
+                        .assignments
+                        .push(builder.build_assignment(reg_write_en, const_1, Guard::True));
+                    group
+                        .borrow_mut()
+                        .assignments
+                        .push(builder.build_assignment(group_done, reg_done, Guard::True));
+
+                    let control = Control::seq(vec![invoke_control, Control::enable(group)]);
+
+                    env.value_map.insert(*id, Structure::Cell(reg));
+
+                    builder.add_continuous_assignments(assigns);
+
+                    Ok(control)
+                }
+                (Type::Fixed { length_total, .. }, Some(_)) => {
+                    let reg = builder.add_primitive("reg", "std_reg", &[*length_total as u64]);
+
+                    let out =
+                        emit_expr(value.unwrap(), env, builder, ast, tcx).with_context(|| {
+                            format!(
+                                "failed to emit initializer for let binding `{}`",
+                                id.resolve_id(ast)
+                            )
+                        })?;
+
+                    let group = builder.add_group("let_fixed");
+
+                    let reg_in = reg.borrow().get("in");
+                    let out_out = out.output;
+
+                    let reg_write_en = reg.borrow().get("write_en");
+                    let done = out
+                        .done
+                        .unwrap_or_else(|| builder.add_constant(1, 1).borrow().get("out"));
+
+                    let group_done = group.borrow().get("done");
+                    let reg_done = reg.borrow().get("done");
+
+                    group
+                        .borrow_mut()
+                        .assignments
+                        .push(builder.build_assignment(reg_in, out_out, Guard::True));
+                    group
+                        .borrow_mut()
+                        .assignments
+                        .push(builder.build_assignment(reg_write_en, done, Guard::True));
+                    group
+                        .borrow_mut()
+                        .assignments
+                        .push(builder.build_assignment(group_done, reg_done, Guard::True));
+
+                    builder.add_continuous_assignments(out.assignments);
+
+                    env.value_map.insert(*id, Structure::Cell(reg));
+
+                    Ok(Control::enable(group))
+                }
+                (_, Some(_)) => {
+                    let (width, _) = bits_for_type(tcx.value_type_map[id], tcx);
+                    let reg = builder.add_primitive("reg", "std_reg", &[width]);
+
+                    let out =
+                        emit_expr(value.unwrap(), env, builder, ast, tcx).with_context(|| {
+                            format!(
+                                "failed to emit initializer for let binding `{}`",
+                                id.resolve_id(ast)
+                            )
+                        })?;
+
+                    let group = builder.add_group("let_init");
+
+                    let reg_in = reg.borrow().get("in");
+                    let out_out = out.output;
+
+                    let reg_write_en = reg.borrow().get("write_en");
+                    let done = out
+                        .done
+                        .unwrap_or_else(|| builder.add_constant(1, 1).borrow().get("out"));
+
+                    let group_done = group.borrow().get("done");
+                    let reg_done = reg.borrow().get("done");
+
+                    group
+                        .borrow_mut()
+                        .assignments
+                        .push(builder.build_assignment(reg_in, out_out, Guard::True));
+                    group
+                        .borrow_mut()
+                        .assignments
+                        .push(builder.build_assignment(reg_write_en, done, Guard::True));
+                    group
+                        .borrow_mut()
+                        .assignments
+                        .push(builder.build_assignment(group_done, reg_done, Guard::True));
+
+                    builder.add_continuous_assignments(out.assignments);
+
+                    env.value_map.insert(*id, Structure::Cell(reg));
+
+                    Ok(Control::enable(group))
+                }
+                (_, None) => {
+                    let (width, _) = bits_for_type(tcx.value_type_map[id], tcx);
+                    let reg = builder.add_primitive("reg", "std_reg", &[width]);
+                    env.value_map.insert(*id, Structure::Cell(reg));
+                    Ok(Control::empty())
+                }
+            }
+        }
+        _ => todo!(),
+    }
 }
 
 fn emit_array_decl(
@@ -136,7 +358,7 @@ fn emit_decl(decl: &Decl, env: &mut Env, builder: &mut Builder, tcx: &TypeContex
             Structure::Cell(builder.add_primitive("reg", "std_reg", &[width]))
         }
     };
-    env.insert(decl.id, structure);
+    env.value_map.insert(decl.id, structure);
     Ok(())
 }
 
@@ -150,8 +372,9 @@ fn emit_def(
         // TODO: refactor bail! macros into proper error types
         Def::Record { .. } => bail!("record definitions not supported yet"),
         Def::Func { sig, body } => {
-            let mut env = Env::new();
+            let mut env = Env::default();
 
+            let mut arg_ids = vec![(Id::default(), false); sig.args.len()];
             let mut ports: Vec<_> = sig
                 .args
                 .iter()
@@ -168,6 +391,9 @@ fn emit_def(
                     )
                 })
                 .collect();
+
+            // could avoid cloning by inserting indices into ast.components into func_map instead?
+            env.func_port_map.insert(sig.name, ports.clone());
 
             // add output port if return type is not void
             if !matches!(&tcx.types[sig.ret_ty], Type::Void) {
@@ -186,17 +412,18 @@ fn emit_def(
 
             let mut component = Component::new(sig.name.get_name(), ports, true, false, None);
 
-            for arg in &sig.args {
+            for (i, arg) in sig.args.iter().enumerate() {
                 if !matches!(&tcx.types[tcx.value_type_map[&arg.id]], Type::Array { .. }) {
-                    env.insert(
+                    arg_ids[i] = (arg.id.get_name().into(), false);
+                    env.value_map.insert(
                         arg.id,
                         Structure::Port(component.signature.borrow().get(arg.id.get_name())),
                     );
                 }
             }
 
-            let mut builder = Builder::new(&mut component, &calyx_ast.lib);
-            for arg in &sig.args {
+            let mut builder = Builder::new(&mut component, &calyx_ast.lib).validate();
+            for (i, arg) in sig.args.iter().enumerate() {
                 if let Type::Array {
                     element_type,
                     dims,
@@ -205,7 +432,14 @@ fn emit_def(
                 {
                     let structure =
                         emit_array_decl(element_type, dims, ports, true, &mut builder, tcx)?;
-                    env.insert(arg.id, structure);
+
+                    if let Structure::Cell(cell) = &structure {
+                        arg_ids[i] = (cell.borrow().name(), true);
+                    } else {
+                        unreachable!("emit_array_decl should return a cell");
+                    }
+
+                    env.value_map.insert(arg.id, structure);
                 }
             }
 
@@ -219,6 +453,7 @@ fn emit_def(
                     },
                 )?;
 
+            env.func_arg_map.insert(sig.name, arg_ids);
             calyx_ast.components.push(component);
         }
     }
@@ -249,9 +484,9 @@ pub fn emit_calyx(
 
     // TODO: handle Calyx imports
 
-    let mut env = Env::new();
+    let mut env = Env::default();
     let mut main_component = Component::new("main", vec![], true, false, None);
-    let mut builder = Builder::new(&mut main_component, &calyx_ast.lib);
+    let mut builder = Builder::new(&mut main_component, &calyx_ast.lib).validate();
 
     program.decls.iter().try_for_each(|decl| {
         emit_decl(decl, &mut env, &mut builder, &ctx.tcx).with_context(|| {
