@@ -11,11 +11,13 @@ use calyx_ir::{Builder, Cell, Control, Port, RRC};
 use cranelift_entity::EntityList;
 use indexmap::IndexMap;
 
+use crate::ast::AssignOp;
 use crate::ast::Command;
 use crate::ast::DimSpec;
 use crate::ast::Expr;
 use crate::ast::FuncId;
 use crate::ast::IdResolve;
+use crate::ast::InfixOp;
 use crate::ast::Type;
 use crate::ast::TypeId;
 use crate::ast::{Ast, CommandId, Decl, Def, ExprId, Program, TypeContext, ValueId};
@@ -25,9 +27,19 @@ type Guard = calyx_ir::Guard<calyx_ir::Nothing>;
 type Assignment = calyx_ir::Assignment<calyx_ir::Nothing>;
 
 struct ExprEmitOutput {
-    output: RRC<Port>,
+    port: RRC<Port>,
     done: Option<RRC<Port>>,
     assignments: Vec<Assignment>,
+}
+
+impl ExprEmitOutput {
+    fn new(port: RRC<Port>, done: Option<RRC<Port>>, assignments: Vec<Assignment>) -> Self {
+        Self {
+            port,
+            done,
+            assignments,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -84,9 +96,9 @@ fn emit_invoke(
         assignments.extend(emit_output.assignments.into_iter());
 
         if *is_refcell {
-            ref_cells.push((id.clone(), emit_output.output.borrow_mut().cell_parent()));
+            ref_cells.push((id.clone(), emit_output.port.borrow_mut().cell_parent()));
         } else {
-            inputs.push((id.clone(), emit_output.output));
+            inputs.push((id.clone(), emit_output.port));
         }
     }
 
@@ -104,12 +116,110 @@ fn emit_invoke(
 
 fn emit_lvalue(
     expr: ExprId,
+    rhs_done: RRC<Port>,
     env: &mut Env,
     builder: &mut Builder,
     ast: &Ast,
     tcx: &TypeContext,
 ) -> Result<ExprEmitOutput> {
-    todo!()
+    match &ast.exprs[expr] {
+        Expr::Id(id) => {
+            if let Structure::Cell(cell) =
+                env.value_map.get(id).expect("def should be in value_map")
+            {
+                let cell_in = cell.borrow().get("in");
+
+                let cell_write_en = cell.borrow().get("write_en");
+                let assgn = builder.build_assignment(cell_write_en, rhs_done, Guard::True);
+
+                let cell_done = cell.borrow().get("done");
+
+                Ok(ExprEmitOutput::new(cell_in, Some(cell_done), vec![assgn]))
+            } else {
+                bail!("Cannot assign to non-cell");
+            }
+        }
+        Expr::ArrayAccess { array, indices } => {
+            let cell = if let Structure::Cell(cell) = env
+                .value_map
+                .get(array)
+                .expect("def should be in value_map")
+            {
+                cell.clone()
+            } else {
+                unreachable!("Arrays should be emitted as cells")
+            };
+
+            let mem_write_en = cell.borrow().get("write_en");
+            let mem_done = cell.borrow().get("done");
+            let mem_write_data = cell.borrow().get("write_data");
+            let mem_content_en = cell.borrow().get("content_en");
+
+            let mut assignments = Vec::new();
+
+            for (i, idx) in indices.as_slice(&ast.expr_lists).iter().enumerate() {
+                let idx_out = emit_expr(*idx, env, builder, ast, tcx).with_context(|| {
+                    format!(
+                        "failed to emit index for array {} access",
+                        array.resolve_id(ast)
+                    )
+                })?;
+                assignments.extend(idx_out.assignments.into_iter());
+                assignments.push(builder.build_assignment(
+                    cell.borrow().get(format!("addr{}", i)),
+                    idx_out.port,
+                    Guard::True,
+                ));
+            }
+
+            let const1 = builder.add_constant(1, 1).borrow().get("out");
+
+            assignments.push(builder.build_assignment(mem_content_en, const1, Guard::True));
+            assignments.push(builder.build_assignment(mem_write_en, rhs_done, Guard::True));
+
+            Ok(ExprEmitOutput::new(
+                mem_write_data,
+                Some(mem_done),
+                assignments,
+            ))
+        }
+        _ => unreachable!("lvalue should be either an Id or an ArrayAccess"),
+    }
+}
+
+fn infix_op_to_primitive(op: InfixOp) -> &'static str {
+    match op {
+        InfixOp::Add => "add",
+        InfixOp::Sub => "sub",
+        InfixOp::Mul => "mult_pipe",
+        InfixOp::Div => "div_pipe",
+        InfixOp::Mod => "div_pipe",
+        InfixOp::Lt => "lt",
+        InfixOp::Gt => "gt",
+        InfixOp::Le => "le",
+        InfixOp::Ge => "ge",
+        InfixOp::Neq => "neq",
+        InfixOp::Eq => "eq",
+        InfixOp::And => "and",
+        InfixOp::Or => "or",
+        InfixOp::Band => "and",
+        InfixOp::Bor => "or",
+        InfixOp::Shl => "lsh",
+        InfixOp::Shr => "rsh",
+        InfixOp::Bxor => "xor",
+    }
+}
+
+fn signed(ty: TypeId, op: InfixOp, tcx: &TypeContext) -> bool {
+    match op {
+        InfixOp::Add | InfixOp::Sub | InfixOp::Mul | InfixOp::Div | InfixOp::Mod => {
+            match &tcx.types[ty] {
+                Type::Bit { unsigned, .. } | Type::Fixed { unsigned, .. } => !unsigned,
+                _ => false,
+            }
+        }
+        _ => false,
+    }
 }
 
 fn emit_expr(
@@ -119,7 +229,233 @@ fn emit_expr(
     ast: &Ast,
     tcx: &TypeContext,
 ) -> Result<ExprEmitOutput> {
-    todo!()
+    match &ast.exprs[expr] {
+        Expr::IntLiteral { .. } => {
+            bail!("Cannot emit unannotated constants; wrap in a cast expression")
+        }
+        Expr::Application { .. } => {
+            bail!("Function application should be assigned to a let binding")
+        }
+        Expr::RationalLiteral(..) => {
+            bail!("Cannot emit unannotated constants; cast to fixed-point first")
+        }
+        Expr::Id(id) => {
+            match env
+                .value_map
+                .get(id)
+                .expect("variable should be in value_map")
+            {
+                Structure::Cell(cell) => {
+                    Ok(ExprEmitOutput::new(cell.borrow().get("out"), None, vec![]))
+                }
+                Structure::Port(port) => Ok(ExprEmitOutput::new(port.clone(), None, vec![])),
+            }
+        }
+        Expr::BoolLiteral(value) => {
+            let const_cell = builder.add_primitive("bool_const", "std_const", &[1, *value as u64]);
+
+            Ok(ExprEmitOutput::new(
+                const_cell.borrow().get("out"),
+                None,
+                vec![],
+            ))
+        }
+        Expr::Cast { expr, ty } => {
+            match &ast.exprs[*expr] {
+                Expr::IntLiteral { value, .. } => {
+                    let (width, _) = bits_for_type(*ty, tcx);
+
+                    // how does this handle negative int literals?
+                    let const_cell =
+                        builder.add_primitive("const", "std_const", &[width, *value as u64]);
+                    Ok(ExprEmitOutput::new(
+                        const_cell.borrow().get("out"),
+                        None,
+                        vec![],
+                    ))
+                }
+                Expr::RationalLiteral(_value) => {
+                    let (width, Some(int_width)) = bits_for_type(*ty, tcx) else {
+                        unreachable!("should only be casted to fixed-point");
+                    };
+
+                    let _frac_width = width - int_width;
+
+                    todo!("emit fp_const")
+                }
+                _ => {
+                    let (value_width, _) = bits_for_type(tcx.expr_type_map[expr], tcx);
+                    let (type_width, _) = bits_for_type(*ty, tcx);
+
+                    let value_out = emit_expr(*expr, env, builder, ast, tcx)
+                        .context("failed to emit cast expression value")?;
+
+                    if value_width == type_width {
+                        Ok(value_out)
+                    } else {
+                        let cell = if type_width > value_width {
+                            builder.add_primitive("pad", "std_pad", &[value_width, type_width])
+                        } else {
+                            builder.add_primitive("slice", "std_slice", &[value_width, type_width])
+                        };
+
+                        let mut assignments = value_out.assignments;
+                        assignments.push(builder.build_assignment(
+                            cell.borrow().get("in"),
+                            value_out.port,
+                            Guard::True,
+                        ));
+
+                        Ok(ExprEmitOutput::new(
+                            cell.borrow().get("out"),
+                            value_out.done,
+                            assignments,
+                        ))
+                    }
+                }
+            }
+        }
+        Expr::BinOp { left, op, right } => {
+            let op_string = infix_op_to_primitive(*op);
+            let slow_op = matches!(op, InfixOp::Mul | InfixOp::Div | InfixOp::Mod);
+
+            let out_port = match op {
+                InfixOp::Div => "out_quotient",
+                InfixOp::Mod => "out_remainder",
+                _ => "out",
+            };
+
+            let lhs_out =
+                emit_expr(*left, env, builder, ast, tcx).context("failed to emit LHS of binop")?;
+            let rhs_out =
+                emit_expr(*right, env, builder, ast, tcx).context("failed to emit RHS of binop")?;
+
+            let (lhs_width, lhs_int_width) = bits_for_type(tcx.expr_type_map[left], tcx);
+            let (rhs_width, rhs_int_width) = bits_for_type(tcx.expr_type_map[right], tcx);
+
+            match (lhs_int_width, rhs_int_width) {
+                (Some(lhs_int_width), Some(rhs_int_width)) => {
+                    if slow_op {
+                        if lhs_int_width != rhs_int_width {
+                            bail!("Mismatched operand widths for binop");
+                        }
+                    } else {
+                        if !(lhs_width == rhs_width && lhs_int_width == rhs_int_width) {
+                            bail!("Mismatched operand widths for binop");
+                        }
+                    }
+                }
+                (None, None) => {
+                    if lhs_width != rhs_width {
+                        bail!("Mismatched operand widths for binop");
+                    }
+                }
+                _ => {
+                    bail!("Cannot mix fixed-point and non-fixed-point types in binop");
+                }
+            };
+
+            let signed_str = if signed(tcx.expr_type_map[left], *op, tcx) {
+                "s"
+            } else {
+                ""
+            };
+
+            let cell = if let Some(lhs_int_width) = lhs_int_width {
+                let lhs_frac_width = lhs_width - lhs_int_width;
+                builder.add_primitive(
+                    op_string,
+                    format!("std_fp_{}{}", signed_str, op_string),
+                    &[lhs_width, lhs_int_width, lhs_frac_width],
+                )
+            } else {
+                builder.add_primitive(
+                    op_string,
+                    format!("std_{}{}", signed_str, op_string),
+                    &[lhs_width],
+                )
+            };
+
+            let mut assignments = Vec::new();
+
+            assignments.extend(lhs_out.assignments.into_iter());
+            assignments.extend(rhs_out.assignments.into_iter());
+
+            let cell_done = cell.borrow().get("done");
+            if slow_op {
+                let cell_go = cell.borrow().get("go");
+                let const1 = builder.add_constant(1, 1).borrow().get("out");
+                assignments.push(builder.build_assignment(
+                    cell_go,
+                    const1,
+                    Guard::Not(Guard::Port(cell_done.clone()).into()),
+                ));
+            }
+
+            assignments.push(builder.build_assignment(
+                cell.borrow().get("left"),
+                lhs_out.port,
+                Guard::True,
+            ));
+            assignments.push(builder.build_assignment(
+                cell.borrow().get("right"),
+                rhs_out.port,
+                Guard::True,
+            ));
+
+            Ok(ExprEmitOutput::new(
+                cell.borrow().get(out_port),
+                if slow_op { Some(cell_done) } else { None },
+                assignments,
+            ))
+        }
+        Expr::ArrayAccess { array, indices } => {
+            let cell = if let Structure::Cell(cell) = env
+                .value_map
+                .get(array)
+                .expect("def should be in value_map")
+            {
+                cell.clone()
+            } else {
+                unreachable!("Arrays should be emitted as cells")
+            };
+
+            let mem_write_en = cell.borrow().get("write_en");
+            let mem_read_data = cell.borrow().get("read_data");
+            let mem_done = cell.borrow().get("done");
+            let mem_content_en = cell.borrow().get("content_en");
+
+            let mut assignments = Vec::new();
+
+            for (i, idx) in indices.as_slice(&ast.expr_lists).iter().enumerate() {
+                let idx_out = emit_expr(*idx, env, builder, ast, tcx).with_context(|| {
+                    format!(
+                        "failed to emit index for array {} access",
+                        array.resolve_id(ast)
+                    )
+                })?;
+                assignments.extend(idx_out.assignments.into_iter());
+                assignments.push(builder.build_assignment(
+                    cell.borrow().get(format!("addr{}", i)),
+                    idx_out.port,
+                    Guard::True,
+                ));
+            }
+
+            let const0 = builder.add_constant(0, 1).borrow().get("out");
+            let const1 = builder.add_constant(1, 1).borrow().get("out");
+
+            assignments.push(builder.build_assignment(mem_content_en, const1, Guard::True));
+            assignments.push(builder.build_assignment(mem_write_en, const0, Guard::True));
+
+            Ok(ExprEmitOutput::new(
+                mem_read_data,
+                Some(mem_done),
+                assignments,
+            ))
+        }
+        _ => unimplemented!("expression type not supported yet: {:?}", ast.exprs[expr]),
+    }
 }
 
 fn emit_command(
@@ -159,7 +495,7 @@ fn emit_command(
                     },
                     None,
                 ) => {
-                    let structure = emit_array_decl(element_type, dims, ports, false, builder, tcx)
+                    let structure = emit_array_decl(element_type, dims, ports, false, false, builder, tcx)
                         .with_context(|| {
                             format!("failed to emit let binding `{}`", id.resolve_id(ast))
                         })?;
@@ -225,7 +561,7 @@ fn emit_command(
                     let group = builder.add_group("let_fixed");
 
                     let reg_in = reg.borrow().get("in");
-                    let out_out = out.output;
+                    let out_out = out.port;
 
                     let reg_write_en = reg.borrow().get("write_en");
                     let done = out
@@ -269,7 +605,7 @@ fn emit_command(
                     let group = builder.add_group("let_init");
 
                     let reg_in = reg.borrow().get("in");
-                    let out_out = out.output;
+                    let out_out = out.port;
 
                     let reg_write_en = reg.borrow().get("write_en");
                     let done = out
@@ -322,7 +658,45 @@ fn emit_command(
             }
         }
         Command::Update { lhs, op, rhs } => {
-            todo!()
+            if *op == AssignOp::Assign {
+                let rhs_out =
+                    emit_expr(*rhs, env, builder, ast, tcx).context("failed to emit update RHS")?;
+
+                let rhs_done = rhs_out
+                    .done
+                    .unwrap_or_else(|| builder.add_constant(1, 1).borrow().get("out"));
+
+                let lhs_out = emit_lvalue(*lhs, rhs_done, env, builder, ast, tcx)
+                    .context("failed to emit update LHS")?;
+
+                assert!(lhs_out.done.is_some(), "Lvalue should have a done signal");
+
+                let group = builder.add_group("update");
+                group
+                    .borrow_mut()
+                    .assignments
+                    .extend(lhs_out.assignments.into_iter());
+                group
+                    .borrow_mut()
+                    .assignments
+                    .extend(rhs_out.assignments.into_iter());
+
+                group
+                    .borrow_mut()
+                    .assignments
+                    .push(builder.build_assignment(lhs_out.port, rhs_out.port, Guard::True));
+
+                let group_done = group.borrow().get("done");
+                let lhs_done = lhs_out.done.unwrap();
+                group
+                    .borrow_mut()
+                    .assignments
+                    .push(builder.build_assignment(group_done, lhs_done, Guard::True));
+
+                Ok(Control::enable(group))
+            } else {
+                bail!("Only support simple assignment for now")
+            }
         }
         Command::IfElse { cond, then, else_ } => {
             let cond_out = emit_expr(*cond, env, builder, ast, tcx)
@@ -346,7 +720,7 @@ fn emit_command(
                 Ok(Control::seq(vec![
                     Control::enable(group),
                     Control::if_(
-                        cond_out.output,
+                        cond_out.port,
                         None,
                         then_control.into(),
                         else_control.into(),
@@ -358,7 +732,7 @@ fn emit_command(
                 group.borrow_mut().assignments = cond_out.assignments;
 
                 Ok(Control::if_(
-                    cond_out.output,
+                    cond_out.port,
                     Some(group),
                     then_control.into(),
                     else_control.into(),
@@ -384,7 +758,7 @@ fn emit_command(
             group.borrow_mut().assignments = cond_out.assignments;
 
             Ok(Control::while_(
-                cond_out.output,
+                cond_out.port,
                 Some(group),
                 body_control.into(),
             ))
@@ -395,7 +769,7 @@ fn emit_command(
                     .context("failed to emit return expression")?;
 
                 let this_out = builder.component.signature.borrow().get("out");
-                let out_out = out.output;
+                let out_out = out.port;
 
                 let assign = builder.build_assignment(this_out, out_out, Guard::True);
                 out.assignments.push(assign);
@@ -417,7 +791,8 @@ fn emit_array_decl(
     element_type: &TypeId,
     dims: &Vec<DimSpec>,
     ports: &usize,
-    fn_arg: bool,
+    external: bool,
+    reference: bool,
     builder: &mut Builder,
     tcx: &TypeContext,
 ) -> Result<Structure> {
@@ -439,10 +814,10 @@ fn emit_array_decl(
 
     let cell = builder.add_primitive("mem", format!("seq_mem_d{}", dims.len()), &params);
 
-    if !fn_arg {
+    if external {
         cell.borrow_mut().add_attribute(BoolAttr::External, 1);
     }
-    cell.borrow_mut().set_reference(fn_arg);
+    cell.borrow_mut().set_reference(reference);
 
     Ok(Structure::Cell(cell))
 }
@@ -455,7 +830,7 @@ fn emit_decl(decl: &Decl, env: &mut Env, builder: &mut Builder, tcx: &TypeContex
             element_type,
             dims,
             ports,
-        } => emit_array_decl(element_type, dims, ports, false, builder, tcx)?,
+        } => emit_array_decl(element_type, dims, ports, true, false, builder, tcx)?,
         _ => {
             let (width, _) = bits_for_type(tid, tcx);
             Structure::Cell(builder.add_primitive("reg", "std_reg", &[width]))
@@ -534,7 +909,7 @@ fn emit_def(
                 } = &tcx.types[tcx.value_type_map[&arg.id]]
                 {
                     let structure =
-                        emit_array_decl(element_type, dims, ports, true, &mut builder, tcx)?;
+                        emit_array_decl(element_type, dims, ports, false, true, &mut builder, tcx)?;
 
                     if let Structure::Cell(cell) = &structure {
                         arg_ids[i] = (cell.borrow().name(), true);
