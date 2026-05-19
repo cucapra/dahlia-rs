@@ -3,7 +3,6 @@ use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
 use bigdecimal::BigDecimal;
-use bigdecimal::Num;
 use bigdecimal::ToPrimitive;
 use calyx_ir::Attributes;
 use calyx_ir::BoolAttr;
@@ -406,8 +405,8 @@ fn emit_expr(
             assignments.extend(lhs_out.assignments.into_iter());
             assignments.extend(rhs_out.assignments.into_iter());
 
-            let cell_done = cell.borrow().get("done");
             if slow_op {
+                let cell_done = cell.borrow().get("done");
                 let cell_go = cell.borrow().get("go");
                 let const1 = builder.add_constant(1, 1).borrow().get("out");
                 assignments.push(builder.build_assignment(
@@ -430,7 +429,11 @@ fn emit_expr(
 
             Ok(ExprEmitOutput::new(
                 cell.borrow().get(out_port),
-                if slow_op { Some(cell_done) } else { None },
+                if slow_op {
+                    Some(cell.borrow().get("done"))
+                } else {
+                    None
+                },
                 assignments,
             ))
         }
@@ -552,18 +555,12 @@ fn emit_command(
                     let group_done = group.borrow().get("done");
                     let reg_done = reg.borrow().get("done");
 
-                    group
-                        .borrow_mut()
-                        .assignments
-                        .push(builder.build_assignment(reg_in, invoke_out, Guard::True));
-                    group
-                        .borrow_mut()
-                        .assignments
-                        .push(builder.build_assignment(reg_write_en, const_1, Guard::True));
-                    group
-                        .borrow_mut()
-                        .assignments
-                        .push(builder.build_assignment(group_done, reg_done, Guard::True));
+                    let assignments = vec![
+                        builder.build_assignment(reg_in, invoke_out, Guard::True),
+                        builder.build_assignment(reg_write_en, const_1, Guard::True),
+                        builder.build_assignment(group_done, reg_done, Guard::True),
+                    ];
+                    group.borrow_mut().assignments.extend(assignments);
 
                     let control = Control::seq(vec![invoke_control, Control::enable(group)]);
 
@@ -597,18 +594,12 @@ fn emit_command(
                     let group_done = group.borrow().get("done");
                     let reg_done = reg.borrow().get("done");
 
-                    group
-                        .borrow_mut()
-                        .assignments
-                        .push(builder.build_assignment(reg_in, out_out, Guard::True));
-                    group
-                        .borrow_mut()
-                        .assignments
-                        .push(builder.build_assignment(reg_write_en, done, Guard::True));
-                    group
-                        .borrow_mut()
-                        .assignments
-                        .push(builder.build_assignment(group_done, reg_done, Guard::True));
+                    let assignments = vec![
+                        builder.build_assignment(reg_in, out_out, Guard::True),
+                        builder.build_assignment(reg_write_en, done, Guard::True),
+                        builder.build_assignment(group_done, reg_done, Guard::True),
+                    ];
+                    group.borrow_mut().assignments.extend(assignments);
 
                     builder.add_continuous_assignments(out.assignments);
 
@@ -641,18 +632,12 @@ fn emit_command(
                     let group_done = group.borrow().get("done");
                     let reg_done = reg.borrow().get("done");
 
-                    group
-                        .borrow_mut()
-                        .assignments
-                        .push(builder.build_assignment(reg_in, out_out, Guard::True));
-                    group
-                        .borrow_mut()
-                        .assignments
-                        .push(builder.build_assignment(reg_write_en, done, Guard::True));
-                    group
-                        .borrow_mut()
-                        .assignments
-                        .push(builder.build_assignment(group_done, reg_done, Guard::True));
+                    let assignments = vec![
+                        builder.build_assignment(reg_in, out_out, Guard::True),
+                        builder.build_assignment(reg_write_en, done, Guard::True),
+                        builder.build_assignment(group_done, reg_done, Guard::True),
+                    ];
+                    group.borrow_mut().assignments.extend(assignments);
 
                     builder.add_continuous_assignments(out.assignments);
 
@@ -714,10 +699,10 @@ fn emit_command(
 
                 let group_done = group.borrow().get("done");
                 let lhs_done = lhs_out.done.unwrap();
-                group
-                    .borrow_mut()
-                    .assignments
-                    .push(builder.build_assignment(group_done, lhs_done, Guard::True));
+
+                let assignments = vec![builder.build_assignment(group_done, lhs_done, Guard::True)];
+
+                group.borrow_mut().assignments.extend(assignments);
 
                 Ok(Control::enable(group))
             } else {
@@ -737,11 +722,9 @@ fn emit_command(
                 let group = builder.add_group("cond");
 
                 let cond_done = group.borrow().get("done");
-                group.borrow_mut().assignments = cond_out.assignments;
-                group
-                    .borrow_mut()
-                    .assignments
-                    .push(builder.build_assignment(cond_done, done, Guard::True));
+                let mut assignments = cond_out.assignments;
+                assignments.push(builder.build_assignment(cond_done, done, Guard::True));
+                group.borrow_mut().assignments = assignments;
 
                 Ok(Control::seq(vec![
                     Control::enable(group),
