@@ -17,4 +17,5 @@ indexmap = "2.14.0"
 pretty = "0.12"
 calyx-ir = { git = "https://github.com/calyxir/calyx" }
 calyx-frontend = { git = "https://github.com/calyxir/calyx" }
+bigdecimal = "0.4.10"
 

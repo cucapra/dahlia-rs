@@ -1,6 +1,10 @@
 use anyhow::Context;
 use anyhow::Result;
+use anyhow::anyhow;
 use anyhow::bail;
+use bigdecimal::BigDecimal;
+use bigdecimal::Num;
+use bigdecimal::ToPrimitive;
 use calyx_ir::Attributes;
 use calyx_ir::BoolAttr;
 use calyx_ir::Component;
@@ -274,14 +278,35 @@ fn emit_expr(
                         vec![],
                     ))
                 }
-                Expr::RationalLiteral(_value) => {
+                Expr::RationalLiteral(value) => {
                     let (width, Some(int_width)) = bits_for_type(*ty, tcx) else {
-                        unreachable!("should only be casted to fixed-point");
+                        unreachable!(
+                            "rational expression should only be casted to a fixed-point type"
+                        );
                     };
 
-                    let _frac_width = width - int_width;
+                    let frac_width = width - int_width;
+                    let scaled_value = value
+                        .parse::<BigDecimal>()
+                        .expect("invalid rational literal")
+                        * BigDecimal::from(1u64 << frac_width);
 
-                    todo!("emit fp_const")
+                    // should we do rounding at all, or simply bail if the value cannot be represented as in the Scala version?
+                    let rounded_value =
+                        scaled_value.with_scale_round(0, bigdecimal::RoundingMode::HalfEven);
+
+                    let twos_complement = rounded_value
+                        .to_i64()
+                        .ok_or_else(|| anyhow!("rational literal cannot be represented in i64"))?
+                        as u64;
+
+                    let cell = builder.add_primitive(
+                        "float_const",
+                        "std_const",
+                        &[width, twos_complement],
+                    );
+
+                    Ok(ExprEmitOutput::new(cell.borrow().get("out"), None, vec![]))
                 }
                 _ => {
                     let (value_width, _) = bits_for_type(tcx.expr_type_map[expr], tcx);
@@ -495,10 +520,11 @@ fn emit_command(
                     },
                     None,
                 ) => {
-                    let structure = emit_array_decl(element_type, dims, ports, false, false, builder, tcx)
-                        .with_context(|| {
-                            format!("failed to emit let binding `{}`", id.resolve_id(ast))
-                        })?;
+                    let structure =
+                        emit_array_decl(element_type, dims, ports, false, false, builder, tcx)
+                            .with_context(|| {
+                                format!("failed to emit let binding `{}`", id.resolve_id(ast))
+                            })?;
                     env.value_map.insert(*id, structure);
                     Ok(Control::empty())
                 }
