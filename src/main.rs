@@ -43,7 +43,7 @@ fn main() -> Result<()> {
 
     emit_calyx(&program, &mut calyx_ast, &dahlia_ctx)?;
 
-    Printer::write_context(&calyx_ast, true, &mut std::io::stdout())
+    Printer::write_context(&calyx_ast, false, &mut std::io::stdout())
         .map_err(|e| anyhow!("failed to print Calyx IR: {:?}", e))?;
 
     Ok(())
