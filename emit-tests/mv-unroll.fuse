@@ -1,0 +1,306 @@
+decl M_int: bit<32>[6][8];
+decl V_int: bit<32>[8];
+decl R_int: bit<32>[6];
+let M0_0: bit<32>[2][2];
+let M0_1: bit<32>[2][2];
+let M0_2: bit<32>[2][2];
+let M0_3: bit<32>[2][2];
+let M1_0: bit<32>[2][2];
+let M1_1: bit<32>[2][2];
+let M1_2: bit<32>[2][2];
+let M1_3: bit<32>[2][2];
+let M2_0: bit<32>[2][2];
+let M2_1: bit<32>[2][2];
+let M2_2: bit<32>[2][2];
+let M2_3: bit<32>[2][2];
+let V0: bit<32>[2];
+let V1: bit<32>[2];
+let V2: bit<32>[2];
+let V3: bit<32>[2];
+let R0: bit<32>[2];
+let R1: bit<32>[2];
+let R2: bit<32>[2];
+{
+  {
+    let i: bit<4> = (0 as bit<4>);
+    ---
+    /* @bound(6) */ while ((i <= (5 as bit<4>))) {
+      {
+        let j: bit<5> = (0 as bit<5>);
+        ---
+        /* @bound(8) */ while ((j <= (7 as bit<5>))) {
+          let M_int_read0_: bit<32> = M_int[(i as ubit<3>)][(j as ubit<4>)];
+          ---
+          let bin_read0_: bit<4> = (i % (3 as bit<4>));
+          ---
+          if ((((j & (3 as bit<5>)) == (0 as bit<5>)) && (bin_read0_ == (2 as bit<4>)))) {
+            let bin_read1_: bit<4> = (i / (3 as bit<4>));
+            ---
+            M2_0[(bin_read1_ as ubit<2>)][((j >> (2 as bit<5>)) as ubit<2>)] := M_int_read0_;
+          }
+          let bin_read2_: bit<4> = (i % (3 as bit<4>));
+          ---
+          if ((((j & (3 as bit<5>)) == (3 as bit<5>)) && (bin_read2_ == (0 as bit<4>)))) {
+            let bin_read3_: bit<4> = (i / (3 as bit<4>));
+            ---
+            M0_3[(bin_read3_ as ubit<2>)][((j >> (2 as bit<5>)) as ubit<2>)] := M_int_read0_;
+          }
+          let bin_read4_: bit<4> = (i % (3 as bit<4>));
+          ---
+          if ((((j & (3 as bit<5>)) == (3 as bit<5>)) && (bin_read4_ == (1 as bit<4>)))) {
+            let bin_read5_: bit<4> = (i / (3 as bit<4>));
+            ---
+            M1_3[(bin_read5_ as ubit<2>)][((j >> (2 as bit<5>)) as ubit<2>)] := M_int_read0_;
+          }
+          let bin_read6_: bit<4> = (i % (3 as bit<4>));
+          ---
+          if ((((j & (3 as bit<5>)) == (1 as bit<5>)) && (bin_read6_ == (2 as bit<4>)))) {
+            let bin_read7_: bit<4> = (i / (3 as bit<4>));
+            ---
+            M2_1[(bin_read7_ as ubit<2>)][((j >> (2 as bit<5>)) as ubit<2>)] := M_int_read0_;
+          }
+          let bin_read8_: bit<4> = (i % (3 as bit<4>));
+          ---
+          if ((((j & (3 as bit<5>)) == (3 as bit<5>)) && (bin_read8_ == (2 as bit<4>)))) {
+            let bin_read9_: bit<4> = (i / (3 as bit<4>));
+            ---
+            M2_3[(bin_read9_ as ubit<2>)][((j >> (2 as bit<5>)) as ubit<2>)] := M_int_read0_;
+          }
+          let bin_read10_: bit<4> = (i % (3 as bit<4>));
+          ---
+          if ((((j & (3 as bit<5>)) == (0 as bit<5>)) && (bin_read10_ == (0 as bit<4>)))) {
+            let bin_read11_: bit<4> = (i / (3 as bit<4>));
+            ---
+            M0_0[(bin_read11_ as ubit<2>)][((j >> (2 as bit<5>)) as ubit<2>)] := M_int_read0_;
+          }
+          let bin_read12_: bit<4> = (i % (3 as bit<4>));
+          ---
+          if ((((j & (3 as bit<5>)) == (1 as bit<5>)) && (bin_read12_ == (0 as bit<4>)))) {
+            let bin_read13_: bit<4> = (i / (3 as bit<4>));
+            ---
+            M0_1[(bin_read13_ as ubit<2>)][((j >> (2 as bit<5>)) as ubit<2>)] := M_int_read0_;
+          }
+          let bin_read14_: bit<4> = (i % (3 as bit<4>));
+          ---
+          if ((((j & (3 as bit<5>)) == (2 as bit<5>)) && (bin_read14_ == (1 as bit<4>)))) {
+            let bin_read15_: bit<4> = (i / (3 as bit<4>));
+            ---
+            M1_2[(bin_read15_ as ubit<2>)][((j >> (2 as bit<5>)) as ubit<2>)] := M_int_read0_;
+          }
+          let bin_read16_: bit<4> = (i % (3 as bit<4>));
+          ---
+          if ((((j & (3 as bit<5>)) == (1 as bit<5>)) && (bin_read16_ == (1 as bit<4>)))) {
+            let bin_read17_: bit<4> = (i / (3 as bit<4>));
+            ---
+            M1_1[(bin_read17_ as ubit<2>)][((j >> (2 as bit<5>)) as ubit<2>)] := M_int_read0_;
+          }
+          let bin_read18_: bit<4> = (i % (3 as bit<4>));
+          ---
+          if ((((j & (3 as bit<5>)) == (2 as bit<5>)) && (bin_read18_ == (0 as bit<4>)))) {
+            let bin_read19_: bit<4> = (i / (3 as bit<4>));
+            ---
+            M0_2[(bin_read19_ as ubit<2>)][((j >> (2 as bit<5>)) as ubit<2>)] := M_int_read0_;
+          }
+          let bin_read20_: bit<4> = (i % (3 as bit<4>));
+          ---
+          if ((((j & (3 as bit<5>)) == (0 as bit<5>)) && (bin_read20_ == (1 as bit<4>)))) {
+            let bin_read21_: bit<4> = (i / (3 as bit<4>));
+            ---
+            M1_0[(bin_read21_ as ubit<2>)][((j >> (2 as bit<5>)) as ubit<2>)] := M_int_read0_;
+          }
+          let bin_read22_: bit<4> = (i % (3 as bit<4>));
+          ---
+          if ((((j & (3 as bit<5>)) == (2 as bit<5>)) && (bin_read22_ == (2 as bit<4>)))) {
+            let bin_read23_: bit<4> = (i / (3 as bit<4>));
+            ---
+            M2_2[(bin_read23_ as ubit<2>)][((j >> (2 as bit<5>)) as ubit<2>)] := M_int_read0_;
+          }
+          ---
+          j := (j + (1 as bit<5>));
+        }
+      }
+      let R_int_read0_: bit<32> = R_int[(i as ubit<3>)];
+      ---
+      let bin_read24_: bit<4> = (i % (3 as bit<4>));
+      ---
+      if ((bin_read24_ == (0 as bit<4>))) {
+        let bin_read25_: bit<4> = (i / (3 as bit<4>));
+        ---
+        R0[(bin_read25_ as ubit<2>)] := R_int_read0_;
+      }
+      let bin_read26_: bit<4> = (i % (3 as bit<4>));
+      ---
+      if ((bin_read26_ == (1 as bit<4>))) {
+        let bin_read27_: bit<4> = (i / (3 as bit<4>));
+        ---
+        R1[(bin_read27_ as ubit<2>)] := R_int_read0_;
+      }
+      let bin_read28_: bit<4> = (i % (3 as bit<4>));
+      ---
+      if ((bin_read28_ == (2 as bit<4>))) {
+        let bin_read29_: bit<4> = (i / (3 as bit<4>));
+        ---
+        R2[(bin_read29_ as ubit<2>)] := R_int_read0_;
+      }
+      ---
+      i := (i + (1 as bit<4>));
+    }
+  }
+  {
+    let i: bit<5> = (0 as bit<5>);
+    ---
+    /* @bound(8) */ while ((i <= (7 as bit<5>))) {
+      let V_int_read0_: bit<32> = V_int[(i as ubit<4>)];
+      ---
+      if (((i & (3 as bit<5>)) == (0 as bit<5>))) {
+        V0[((i >> (2 as bit<5>)) as ubit<2>)] := V_int_read0_;
+      }
+      if (((i & (3 as bit<5>)) == (1 as bit<5>))) {
+        V1[((i >> (2 as bit<5>)) as ubit<2>)] := V_int_read0_;
+      }
+      if (((i & (3 as bit<5>)) == (2 as bit<5>))) {
+        V2[((i >> (2 as bit<5>)) as ubit<2>)] := V_int_read0_;
+      }
+      if (((i & (3 as bit<5>)) == (3 as bit<5>))) {
+        V3[((i >> (2 as bit<5>)) as ubit<2>)] := V_int_read0_;
+      }
+      ---
+      i := (i + (1 as bit<5>));
+    }
+  }
+  ---
+  {
+    let i: bit<4> = (0 as bit<4>);
+    ---
+    while ((i <= (1 as bit<4>))) {
+      {
+        let j: bit<5> = (0 as bit<5>);
+        ---
+        while ((j <= (1 as bit<5>))) {
+          let M_read0_0_0: bit<32>;
+          let M_read0_1_0: bit<32>;
+          let M_read0_2_0: bit<32>;
+          let M_read0_0_1: bit<32>;
+          let M_read0_1_1: bit<32>;
+          let M_read0_2_1: bit<32>;
+          let M_read0_0_2: bit<32>;
+          let M_read0_1_2: bit<32>;
+          let M_read0_2_2: bit<32>;
+          let M_read0_0_3: bit<32>;
+          let M_read0_1_3: bit<32>;
+          let M_read0_2_3: bit<32>;
+          M_read0_0_0 := M0_0[(i as ubit<2>)][(j as ubit<2>)];
+          M_read0_1_0 := M1_0[(i as ubit<2>)][(j as ubit<2>)];
+          M_read0_2_0 := M2_0[(i as ubit<2>)][(j as ubit<2>)];
+          M_read0_0_1 := M0_1[(i as ubit<2>)][(j as ubit<2>)];
+          M_read0_1_1 := M1_1[(i as ubit<2>)][(j as ubit<2>)];
+          M_read0_2_1 := M2_1[(i as ubit<2>)][(j as ubit<2>)];
+          M_read0_0_2 := M0_2[(i as ubit<2>)][(j as ubit<2>)];
+          M_read0_1_2 := M1_2[(i as ubit<2>)][(j as ubit<2>)];
+          M_read0_2_2 := M2_2[(i as ubit<2>)][(j as ubit<2>)];
+          M_read0_0_3 := M0_3[(i as ubit<2>)][(j as ubit<2>)];
+          M_read0_1_3 := M1_3[(i as ubit<2>)][(j as ubit<2>)];
+          M_read0_2_3 := M2_3[(i as ubit<2>)][(j as ubit<2>)];
+          let V_read0_0: bit<32>;
+          let V_read0_1: bit<32>;
+          let V_read0_2: bit<32>;
+          let V_read0_3: bit<32>;
+          V_read0_0 := V0[(j as ubit<2>)];
+          V_read0_1 := V1[(j as ubit<2>)];
+          V_read0_2 := V2[(j as ubit<2>)];
+          V_read0_3 := V3[(j as ubit<2>)];
+          ---
+          let bin_read30_: bit<32> = (M_read0_0_0 * V_read0_0);
+          ---
+          let rs_0_0: bit<32> = bin_read30_;
+          let bin_read31_: bit<32> = (M_read0_1_0 * V_read0_0);
+          ---
+          let rs_1_0: bit<32> = bin_read31_;
+          let bin_read32_: bit<32> = (M_read0_2_0 * V_read0_0);
+          ---
+          let rs_2_0: bit<32> = bin_read32_;
+          let bin_read33_: bit<32> = (M_read0_0_1 * V_read0_1);
+          ---
+          let rs_0_1: bit<32> = bin_read33_;
+          let bin_read34_: bit<32> = (M_read0_1_1 * V_read0_1);
+          ---
+          let rs_1_1: bit<32> = bin_read34_;
+          let bin_read35_: bit<32> = (M_read0_2_1 * V_read0_1);
+          ---
+          let rs_2_1: bit<32> = bin_read35_;
+          let bin_read36_: bit<32> = (M_read0_0_2 * V_read0_2);
+          ---
+          let rs_0_2: bit<32> = bin_read36_;
+          let bin_read37_: bit<32> = (M_read0_1_2 * V_read0_2);
+          ---
+          let rs_1_2: bit<32> = bin_read37_;
+          let bin_read38_: bit<32> = (M_read0_2_2 * V_read0_2);
+          ---
+          let rs_2_2: bit<32> = bin_read38_;
+          let bin_read39_: bit<32> = (M_read0_0_3 * V_read0_3);
+          ---
+          let rs_0_3: bit<32> = bin_read39_;
+          let bin_read40_: bit<32> = (M_read0_1_3 * V_read0_3);
+          ---
+          let rs_1_3: bit<32> = bin_read40_;
+          let bin_read41_: bit<32> = (M_read0_2_3 * V_read0_3);
+          ---
+          let rs_2_3: bit<32> = bin_read41_;
+          ---
+          {
+            let red_read0_: bit<32> = R2[(i as ubit<2>)];
+            ---
+            R2[(i as ubit<2>)] := (red_read0_ + (((rs_2_0 + rs_2_1) + rs_2_2) + rs_2_3));
+          }
+          {
+            let red_read1_: bit<32> = R1[(i as ubit<2>)];
+            ---
+            R1[(i as ubit<2>)] := (red_read1_ + (((rs_1_0 + rs_1_1) + rs_1_2) + rs_1_3));
+          }
+          {
+            let red_read2_: bit<32> = R0[(i as ubit<2>)];
+            ---
+            R0[(i as ubit<2>)] := (red_read2_ + (((rs_0_0 + rs_0_1) + rs_0_2) + rs_0_3));
+          }
+          ---
+          j := (j + (1 as bit<5>));
+        }
+      }
+      ---
+      i := (i + (1 as bit<4>));
+    }
+  }
+  ---
+  {
+    let i: bit<4> = (0 as bit<4>);
+    ---
+    /* @bound(6) */ while ((i <= (5 as bit<4>))) {
+      let R_sh_read0_: bit<32>;
+      let bin_read42_: bit<4> = (i % (3 as bit<4>));
+      ---
+      if ((bin_read42_ == (0 as bit<4>))) {
+        let bin_read43_: bit<4> = (i / (3 as bit<4>));
+        ---
+        R_sh_read0_ := R0[(bin_read43_ as ubit<2>)];
+      }
+      let bin_read44_: bit<4> = (i % (3 as bit<4>));
+      ---
+      if ((bin_read44_ == (1 as bit<4>))) {
+        let bin_read45_: bit<4> = (i / (3 as bit<4>));
+        ---
+        R_sh_read0_ := R1[(bin_read45_ as ubit<2>)];
+      }
+      let bin_read46_: bit<4> = (i % (3 as bit<4>));
+      ---
+      if ((bin_read46_ == (2 as bit<4>))) {
+        let bin_read47_: bit<4> = (i / (3 as bit<4>));
+        ---
+        R_sh_read0_ := R2[(bin_read47_ as ubit<2>)];
+      }
+      ---
+      R_int[(i as ubit<3>)] := R_sh_read0_;
+      ---
+      i := (i + (1 as bit<4>));
+    }
+  }
+}

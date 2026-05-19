@@ -1,1 +1,3 @@
 /target
+.fud*/
+emit-tests/out/

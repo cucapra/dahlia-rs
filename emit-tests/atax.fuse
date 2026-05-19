@@ -1,0 +1,211 @@
+
+decl A_int: ubit<32>[8][8];
+decl x_int: ubit<32>[8];
+decl y_int: ubit<32>[8];
+decl tmp_int: ubit<32>[8];
+let A0_0: ubit<32>[8][4];
+let A0_1: ubit<32>[8][4];
+let x0: ubit<32>[4];
+let x1: ubit<32>[4];
+let y0: ubit<32>[4];
+let y1: ubit<32>[4];
+let tmp0: ubit<32>[4];
+let tmp1: ubit<32>[4];
+{
+  let i: ubit<4> = (0 as ubit<4>);
+  ---
+  /* @bound(8) */ while ((i <= (7 as ubit<4>))) {
+    {
+      let j: ubit<4> = (0 as ubit<4>);
+      ---
+      /* @bound(8) */ while ((j <= (7 as ubit<4>))) {
+        let A_int_read0_: ubit<32> = A_int[i][j];
+        ---
+        if ((((j & (1 as ubit<4>)) == (0 as ubit<4>)) && ((i & (0 as ubit<4>)) == (0 as ubit<4>)))) {
+          A0_0[i][((j >> (1 as ubit<4>)) as ubit<3>)] := A_int_read0_;
+        }
+        if ((((j & (1 as ubit<4>)) == (1 as ubit<4>)) && ((i & (0 as ubit<4>)) == (0 as ubit<4>)))) {
+          A0_1[i][((j >> (1 as ubit<4>)) as ubit<3>)] := A_int_read0_;
+        }
+        ---
+        j := (j + (1 as ubit<4>));
+      }
+    }
+    let x_int_read0_: ubit<32> = x_int[i];
+    ---
+    if (((i & (1 as ubit<4>)) == (0 as ubit<4>))) {
+      x0[((i >> (1 as ubit<4>)) as ubit<3>)] := x_int_read0_;
+    }
+    if (((i & (1 as ubit<4>)) == (1 as ubit<4>))) {
+      x1[((i >> (1 as ubit<4>)) as ubit<3>)] := x_int_read0_;
+    }
+    let y_int_read0_: ubit<32> = y_int[i];
+    ---
+    if (((i & (1 as ubit<4>)) == (0 as ubit<4>))) {
+      y0[((i >> (1 as ubit<4>)) as ubit<3>)] := y_int_read0_;
+    }
+    if (((i & (1 as ubit<4>)) == (1 as ubit<4>))) {
+      y1[((i >> (1 as ubit<4>)) as ubit<3>)] := y_int_read0_;
+    }
+    let tmp_int_read0_: ubit<32> = tmp_int[i];
+    ---
+    if (((i & (1 as ubit<4>)) == (0 as ubit<4>))) {
+      tmp0[((i >> (1 as ubit<4>)) as ubit<3>)] := tmp_int_read0_;
+    }
+    if (((i & (1 as ubit<4>)) == (1 as ubit<4>))) {
+      tmp1[((i >> (1 as ubit<4>)) as ubit<3>)] := tmp_int_read0_;
+    }
+    ---
+    i := (i + (1 as ubit<4>));
+  }
+}
+---
+{
+  let i: ubit<4> = (0 as ubit<4>);
+  ---
+  /* @bound(8) */ while ((i <= (7 as ubit<4>))) {
+    if (((i & (1 as ubit<4>)) == (0 as ubit<4>))) {
+      y0[((i >> (1 as ubit<4>)) as ubit<3>)] := (0 as ubit<32>);
+    }
+    if (((i & (1 as ubit<4>)) == (1 as ubit<4>))) {
+      y1[((i >> (1 as ubit<4>)) as ubit<3>)] := (0 as ubit<32>);
+    }
+    ---
+    i := (i + (1 as ubit<4>));
+  }
+}
+---
+{
+  let i: ubit<4> = (0 as ubit<4>);
+  ---
+  /* @bound(8) */ while ((i <= (7 as ubit<4>))) {
+    if (((i & (1 as ubit<4>)) == (0 as ubit<4>))) {
+      tmp0[((i >> (1 as ubit<4>)) as ubit<3>)] := (0 as ubit<32>);
+    }
+    if (((i & (1 as ubit<4>)) == (1 as ubit<4>))) {
+      tmp1[((i >> (1 as ubit<4>)) as ubit<3>)] := (0 as ubit<32>);
+    }
+    ---
+    {
+      let j: ubit<4> = (0 as ubit<4>);
+      ---
+      while ((j <= (3 as ubit<4>))) {
+        let A_read0_0: ubit<32>;
+        let A_read0_1: ubit<32>;
+        A_read0_0 := A0_0[i][(j as ubit<3>)];
+        A_read0_1 := A0_1[i][(j as ubit<3>)];
+        let x_read0_0: ubit<32>;
+        let x_read0_1: ubit<32>;
+        x_read0_0 := x0[(j as ubit<3>)];
+        x_read0_1 := x1[(j as ubit<3>)];
+        ---
+        let bin_read0_: ubit<32> = (A_read0_0 * x_read0_0);
+        ---
+        let out_0: ubit<32> = bin_read0_;
+        let bin_read1_: ubit<32> = (A_read0_1 * x_read0_1);
+        ---
+        let out_1: ubit<32> = bin_read1_;
+        ---
+        if (((i & (1 as ubit<4>)) == (0 as ubit<4>))) {
+          let red_read0_: ubit<32> = tmp0[((i >> (1 as ubit<4>)) as ubit<3>)];
+          ---
+          tmp0[((i >> (1 as ubit<4>)) as ubit<3>)] := (red_read0_ + (out_0 + out_1));
+        }
+        if (((i & (1 as ubit<4>)) == (1 as ubit<4>))) {
+          let red_read1_: ubit<32> = tmp1[((i >> (1 as ubit<4>)) as ubit<3>)];
+          ---
+          tmp1[((i >> (1 as ubit<4>)) as ubit<3>)] := (red_read1_ + (out_0 + out_1));
+        }
+        ---
+        j := (j + (1 as ubit<4>));
+      }
+    }
+    ---
+    {
+      let j: ubit<4> = (0 as ubit<4>);
+      ---
+      while ((j <= (3 as ubit<4>))) {
+        let y0_0: ubit<32>;
+        let y0_1: ubit<32>;
+        y0_0 := y0[(j as ubit<3>)];
+        y0_1 := y1[(j as ubit<3>)];
+        ---
+        let A_read1_0: ubit<32>;
+        let A_read1_1: ubit<32>;
+        A_read1_0 := A0_0[i][(j as ubit<3>)];
+        A_read1_1 := A0_1[i][(j as ubit<3>)];
+        let tmp_sh_read0_0: ubit<32>;
+        if (((i & (1 as ubit<4>)) == (0 as ubit<4>))) {
+          tmp_sh_read0_0 := tmp0[((i >> (1 as ubit<4>)) as ubit<3>)];
+        }
+        if (((i & (1 as ubit<4>)) == (1 as ubit<4>))) {
+          tmp_sh_read0_0 := tmp1[((i >> (1 as ubit<4>)) as ubit<3>)];
+        }
+        ---
+        let bin_read2_: ubit<32> = (A_read1_0 * tmp_sh_read0_0);
+        ---
+        y0[(j as ubit<3>)] := (y0_0 + bin_read2_);
+        let bin_read3_: ubit<32> = (A_read1_1 * tmp_sh_read0_0);
+        ---
+        y1[(j as ubit<3>)] := (y0_1 + bin_read3_);
+        ---
+        j := (j + (1 as ubit<4>));
+      }
+    }
+    ---
+    i := (i + (1 as ubit<4>));
+  }
+}
+---
+{
+  let i: ubit<4> = (0 as ubit<4>);
+  ---
+  /* @bound(8) */ while ((i <= (7 as ubit<4>))) {
+    {
+      let j: ubit<4> = (0 as ubit<4>);
+      ---
+      /* @bound(8) */ while ((j <= (7 as ubit<4>))) {
+        let A_sh_read0_: ubit<32>;
+        if ((((j & (1 as ubit<4>)) == (0 as ubit<4>)) && ((i & (0 as ubit<4>)) == (0 as ubit<4>)))) {
+          A_sh_read0_ := A0_0[i][((j >> (1 as ubit<4>)) as ubit<3>)];
+        }
+        if ((((j & (1 as ubit<4>)) == (1 as ubit<4>)) && ((i & (0 as ubit<4>)) == (0 as ubit<4>)))) {
+          A_sh_read0_ := A0_1[i][((j >> (1 as ubit<4>)) as ubit<3>)];
+        }
+        ---
+        A_int[i][j] := A_sh_read0_;
+        ---
+        j := (j + (1 as ubit<4>));
+      }
+    }
+    let x_sh_read0_: ubit<32>;
+    if (((i & (1 as ubit<4>)) == (0 as ubit<4>))) {
+      x_sh_read0_ := x0[((i >> (1 as ubit<4>)) as ubit<3>)];
+    }
+    if (((i & (1 as ubit<4>)) == (1 as ubit<4>))) {
+      x_sh_read0_ := x1[((i >> (1 as ubit<4>)) as ubit<3>)];
+    }
+    ---
+    x_int[i] := x_sh_read0_;
+    let y_sh_read0_: ubit<32>;
+    if (((i & (1 as ubit<4>)) == (0 as ubit<4>))) {
+      y_sh_read0_ := y0[((i >> (1 as ubit<4>)) as ubit<3>)];
+    }
+    if (((i & (1 as ubit<4>)) == (1 as ubit<4>))) {
+      y_sh_read0_ := y1[((i >> (1 as ubit<4>)) as ubit<3>)];
+    }
+    ---
+    y_int[i] := y_sh_read0_;
+    let tmp_sh_read1_: ubit<32>;
+    if (((i & (1 as ubit<4>)) == (0 as ubit<4>))) {
+      tmp_sh_read1_ := tmp0[((i >> (1 as ubit<4>)) as ubit<3>)];
+    }
+    if (((i & (1 as ubit<4>)) == (1 as ubit<4>))) {
+      tmp_sh_read1_ := tmp1[((i >> (1 as ubit<4>)) as ubit<3>)];
+    }
+    ---
+    tmp_int[i] := tmp_sh_read1_;
+    ---
+    i := (i + (1 as ubit<4>));
+  }
+}

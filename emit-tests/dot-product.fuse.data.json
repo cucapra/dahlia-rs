@@ -1,0 +1,14 @@
+{
+  "mem": {
+    "data": [2, 3, 5, 7],
+    "format": { "numeric_type": "bitnum", "is_signed": true, "width": 32 }
+  },
+  "mem0": {
+    "data": [3, 5, 7, 11],
+    "format": { "numeric_type": "bitnum", "is_signed": true, "width": 32 }
+  },
+  "mem1": {
+    "data": [0],
+    "format": { "numeric_type": "bitnum", "is_signed": true, "width": 32 }
+  }
+}

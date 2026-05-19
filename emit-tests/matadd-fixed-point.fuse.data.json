@@ -1,0 +1,14 @@
+{
+  "mem": {
+    "data": [[1.0, 1.5], [1.2, 2.0]],
+    "format": { "numeric_type": "fixed_point", "is_signed": true, "width": 16, "int_width": 8 }
+  },
+  "mem0": {
+    "data": [[1.5, 1.0], [1.0, 0.8]],
+    "format": { "numeric_type": "fixed_point", "is_signed": true, "width": 16, "int_width": 8 }
+  },
+  "mem1": {
+    "data": [[0.5, 0.7], [0.2, 0.3]],
+    "format": { "numeric_type": "fixed_point", "is_signed": true, "width": 16, "int_width": 8 }
+  }
+}

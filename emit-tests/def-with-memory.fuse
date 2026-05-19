@@ -1,0 +1,27 @@
+
+def matadd(a: fix<16,8>[2][2], b: fix<16,8>[2][2], result: fix<16,8>[2][2]) = {
+  {
+    let i: bit<2> = (0 as bit<2>);
+    ---
+    /* @bound(2) */ while ((i <= (1 as bit<2>))) {
+      {
+        let j: bit<2> = (0 as bit<2>);
+        ---
+        /* @bound(2) */ while ((j <= (1 as bit<2>))) {
+          let a_read0_: fix<16,8> = a[(i as ubit<2>)][(j as ubit<2>)];
+          let b_read0_: fix<16,8> = b[(i as ubit<2>)][(j as ubit<2>)];
+          ---
+          result[(i as ubit<2>)][(j as ubit<2>)] := (a_read0_ + b_read0_);
+          ---
+          j := (j + (1 as bit<2>));
+        }
+      }
+      ---
+      i := (i + (1 as bit<2>));
+    }
+  }
+}
+decl a: fix<16,8>[2][2];
+decl b: fix<16,8>[2][2];
+decl result: fix<16,8>[2][2];
+matadd(a, b, result);

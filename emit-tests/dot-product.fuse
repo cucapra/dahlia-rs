@@ -1,0 +1,24 @@
+
+decl a: bit<32>[4];
+decl b: bit<32>[4];
+decl result: bit<32>[1];
+let res_: bit<32> = (0 as bit<32>);
+---
+{
+  let i: bit<3> = (0 as bit<3>);
+  ---
+  /* @bound(4) */ while ((i <= (3 as bit<3>))) {
+    let a_read0_: bit<32> = a[(i as ubit<3>)];
+    let b_read0_: bit<32> = b[(i as ubit<3>)];
+    ---
+    let bin_read0_: bit<32> = (a_read0_ * b_read0_);
+    ---
+    let v_: bit<32> = bin_read0_;
+    ---
+    res_ := (res_ + v_);
+    ---
+    i := (i + (1 as bit<3>));
+  }
+}
+---
+result[(0 as ubit<1>)] := res_;
